@@ -87,6 +87,47 @@ impl Sandbox {
         self.run_with_flags(&[], ops)
     }
 
+    /// Run `memo explain <probe> <ops...>`.
+    pub fn explain(&self, ops: &[&str]) -> RunOutcome {
+        let mut cmd = Command::new(memo_exe());
+        cmd.current_dir(&self.work);
+        cmd.env("MEMO_DIR", &self.cache);
+        cmd.env("MEMO_PROBE_MARKER", &self.marker);
+        cmd.env("MEMO_FORCE_STATUS", "1");
+        cmd.arg("explain");
+        cmd.arg(probe_exe());
+        for op in ops {
+            cmd.arg(op);
+        }
+        let out = cmd.output().expect("run memo explain");
+        RunOutcome {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit: out.status.code().unwrap_or(-1),
+            executed: false,
+            executions: 0,
+        }
+    }
+
+    /// Run `memo <args...>` (e.g. a subcommand like `stats`).
+    pub fn subcommand(&self, args: &[&str]) -> RunOutcome {
+        let mut cmd = Command::new(memo_exe());
+        cmd.current_dir(&self.work);
+        cmd.env("MEMO_DIR", &self.cache);
+        cmd.env("MEMO_FORCE_STATUS", "1");
+        for a in args {
+            cmd.arg(a);
+        }
+        let out = cmd.output().expect("run memo subcommand");
+        RunOutcome {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit: out.status.code().unwrap_or(-1),
+            executed: false,
+            executions: 0,
+        }
+    }
+
     pub fn run_with_flags(&self, memo_flags: &[&str], ops: &[&str]) -> RunOutcome {
         let mut cmd = Command::new(memo_exe());
         cmd.current_dir(&self.work);

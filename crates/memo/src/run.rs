@@ -39,12 +39,33 @@ struct Prepared {
     key: String,
     cwd: String,
     argv: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
 }
 
-fn prepare(argv: &[String], statcache: &Mutex<StatCache>) -> Result<Prepared> {
+/// Build the environment the child will run with. When memo's own stdout is a
+/// terminal (and the user didn't opt out), force color output so captured — and
+/// later replayed — output is colored, matching an un-memoized interactive run.
+/// These vars are part of the key, so terminal and redirected runs cache
+/// separately (see design §7.4).
+fn effective_env(flags: &Flags) -> std::collections::BTreeMap<String, String> {
+    let mut env = current_env();
+    if !flags.no_color_env && std::io::stdout().is_terminal() {
+        for (k, v) in [
+            ("FORCE_COLOR", "1"),
+            ("CLICOLOR_FORCE", "1"),
+            ("CARGO_TERM_COLOR", "always"),
+            ("PY_COLORS", "1"),
+        ] {
+            env.entry(k.to_string()).or_insert_with(|| v.to_string());
+        }
+    }
+    env
+}
+
+fn prepare(argv: &[String], flags: &Flags, statcache: &Mutex<StatCache>) -> Result<Prepared> {
     let resolved = resolve(argv)?;
     let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
-    let env = current_env();
+    let env = effective_env(flags);
     let app_hash = hash_of_shared(statcache, &resolved.target).unwrap_or([0u8; 32]);
     let key = memo_core::key::compute_key(&cwd, argv, &env, &app_hash);
     Ok(Prepared {
@@ -52,6 +73,7 @@ fn prepare(argv: &[String], statcache: &Mutex<StatCache>) -> Result<Prepared> {
         key,
         cwd,
         argv: argv.to_vec(),
+        env,
     })
 }
 
@@ -62,14 +84,14 @@ pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
     let store = Store::open(memo_dir());
     let statcache = Mutex::new(StatCache::load(store.statcache_path()));
 
-    let prep = prepare(argv, &statcache)?;
+    let prep = prepare(argv, flags, &statcache)?;
 
     // Record last run context for `explain`.
     let _ = store.record_last(&LastRun {
         key: prep.key.clone(),
         cwd: prep.cwd.clone(),
         argv: prep.argv.clone(),
-        env: current_env(),
+        env: prep.env.clone(),
     });
 
     // Try replay.
@@ -129,7 +151,6 @@ fn launch_and_store(
 
     let server = PipeServer::start(pipe_name.clone(), state.clone())?;
 
-    let env = current_env();
     let t0 = std::time::Instant::now();
     let result = launch(
         &prep.resolved.app,
@@ -137,7 +158,7 @@ fn launch_and_store(
         &prep.cwd,
         &dll_ansi,
         &payload,
-        &env,
+        &prep.env,
     );
     let duration_ms = t0.elapsed().as_millis() as u64;
 
@@ -341,7 +362,7 @@ pub fn explain(argv: &[String]) -> Result<ExitCode> {
     }
     let store = Store::open(memo_dir());
     let statcache = Mutex::new(StatCache::load(store.statcache_path()));
-    let prep = prepare(argv, &statcache)?;
+    let prep = prepare(argv, &Flags::default(), &statcache)?;
 
     let entries = store.load_entries(&prep.key);
     if entries.is_empty() {
