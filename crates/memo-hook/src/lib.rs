@@ -3,6 +3,7 @@
 
 #![allow(non_snake_case)]
 
+mod childhook;
 mod client;
 mod hooks;
 mod ntdef;
