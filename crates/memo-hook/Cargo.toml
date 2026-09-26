@@ -1,0 +1,30 @@
+[package]
+name = "memo-hook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "memo_hook"
+crate-type = ["cdylib"]
+
+[dependencies]
+memo-detours = { path = "../memo-detours" }
+memo-proto = { path = "../memo-proto" }
+memo-core = { path = "../memo-core" }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Kernel",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_SystemServices",
+    "Win32_System_Memory",
+    "Win32_Security",
+] }

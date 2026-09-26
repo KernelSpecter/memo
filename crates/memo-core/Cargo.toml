@@ -1,0 +1,25 @@
+[package]
+name = "memo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+memo-proto = { path = "../memo-proto" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }
+rayon = { workspace = true }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_SystemServices",
+] }
+
+[dev-dependencies]
+tempfile = "3"

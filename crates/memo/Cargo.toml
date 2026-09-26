@@ -1,0 +1,38 @@
+[package]
+name = "memo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "memo"
+path = "src/main.rs"
+
+[dependencies]
+memo-detours = { path = "../memo-detours" }
+memo-proto = { path = "../memo-proto" }
+memo-core = { path = "../memo-core" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }
+rayon = { workspace = true }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Security",
+    "Win32_System_Environment",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_WindowsProgramming",
+] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,4 @@
+# Static CRT so the injected hook DLL has no dependency on vcruntime140.dll,
+# which may not be present in the address space of arbitrary target processes.
+[build]
+rustflags = ["-C", "target-feature=+crt-static"]

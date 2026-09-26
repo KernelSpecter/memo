@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/memo-detours",
+    "crates/memo-proto",
+    "crates/memo-hook",
+    "crates/memo-core",
+    "crates/memo",
+    "crates/memo-probe",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+authors = ["KernelSpecter <KernelSpecter@users.noreply.github.com>"]
+repository = "local"
+
+[workspace.dependencies]
+windows-sys = "0.59"
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+anyhow = "1"
+rayon = "1"
+cc = "1"
+
+[profile.release]
+opt-level = 2
