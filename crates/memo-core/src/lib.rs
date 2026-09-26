@@ -4,9 +4,11 @@
 pub mod cas;
 pub mod entry;
 pub mod fingerprint;
+pub mod key;
 pub mod paths;
 pub mod stat;
 pub mod statcache;
+pub mod store;
 pub mod verify;
 
 /// Cache format version; re-exported from the protocol crate so bumping it in
