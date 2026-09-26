@@ -137,7 +137,12 @@ unsafe extern "system" fn h_createprocessw(
         return real(app, cmd, pa, ta, inherit, flags, env, dir, si, pi);
     }
     let ok = real(app, cmd, pa, ta, inherit, flags | CREATE_SUSPENDED, env, dir, si, pi);
-    if ok != 0 && !pi.is_null() {
+    if ok == 0 {
+        let e = windows_sys::Win32::Foundation::GetLastError();
+        client::taint(TaintReason::InternalError, &format!("CreateProcessW failed err={}", e));
+        return ok;
+    }
+    if !pi.is_null() {
         let info = &*pi;
         let (hp, ht, id) = (info.hProcess, info.hThread, info.dwProcessId);
         let _ = catch_unwind(AssertUnwindSafe(|| handle_child(hp, ht, id, flags)));

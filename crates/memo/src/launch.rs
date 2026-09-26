@@ -78,7 +78,7 @@ unsafe fn make_inheritable_pipe() -> Result<(HANDLE, HANDLE)> {
 
 unsafe fn open_nul() -> HANDLE {
     let name = wide("NUL");
-    CreateFileW(
+    let h = CreateFileW(
         name.as_ptr(),
         windows_sys::Win32::Foundation::GENERIC_READ,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -86,7 +86,13 @@ unsafe fn open_nul() -> HANDLE {
         OPEN_EXISTING,
         0,
         std::ptr::null_mut(),
-    )
+    );
+    // Must be inheritable, or the child's stdin is a dangling handle and any
+    // grandchild spawn that inherits stdin fails with ERROR_INVALID_HANDLE.
+    if h != INVALID_HANDLE_VALUE && !h.is_null() {
+        SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+    }
+    h
 }
 
 /// Launch and wait. `app`/`cmdline` come from resolve; `dll_ansi` is the
