@@ -2,9 +2,15 @@
 //! cache entries, verification, and the on-disk store.
 
 pub mod cas;
+pub mod entry;
+pub mod fingerprint;
 pub mod paths;
 pub mod stat;
 pub mod statcache;
+
+/// Cache format version; re-exported from the protocol crate so bumping it in
+/// one place invalidates both wire and on-disk assumptions.
+pub use memo_proto::FORMAT_VERSION;
 
 /// A 32-byte BLAKE3 content hash.
 pub type Hash = [u8; 32];
