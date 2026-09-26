@@ -1,0 +1,359 @@
+//! Orchestration: compute the key, try to replay from cache, otherwise launch
+//! the command traced, finalize, and store.
+
+use crate::cli::Flags;
+use crate::collect::{now_filetime, Finalized, RunState};
+use crate::launch::{launch, replay_console, ConsoleLog};
+use crate::resolve::{resolve, ResolvedCommand};
+use crate::server::PipeServer;
+use crate::{current_env, memo_dir};
+use anyhow::{anyhow, Result};
+use memo_core::entry::Entry;
+use memo_core::fingerprint::FileState;
+use memo_core::statcache::{hash_of_shared, StatCache};
+use memo_core::store::{LastRun, Store};
+use memo_core::verify::{first_mismatch, verify_entry};
+use memo_proto::RunPayload;
+use std::io::IsTerminal;
+use std::path::Path;
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
+static PIPE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn dll_path() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow!("cannot locate memo.exe directory"))?;
+    let dll = dir.join("memo_hook.dll");
+    if !dll.exists() {
+        return Err(anyhow!("memo_hook.dll not found next to memo.exe at {}", dll.display()));
+    }
+    Ok(dll)
+}
+
+struct Prepared {
+    resolved: ResolvedCommand,
+    key: String,
+    cwd: String,
+    argv: Vec<String>,
+}
+
+fn prepare(argv: &[String], statcache: &Mutex<StatCache>) -> Result<Prepared> {
+    let resolved = resolve(argv)?;
+    let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
+    let env = current_env();
+    let app_hash = hash_of_shared(statcache, &resolved.target).unwrap_or([0u8; 32]);
+    let key = memo_core::key::compute_key(&cwd, argv, &env, &app_hash);
+    Ok(Prepared {
+        resolved,
+        key,
+        cwd,
+        argv: argv.to_vec(),
+    })
+}
+
+pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
+    if argv.is_empty() {
+        return Err(anyhow!("no command given"));
+    }
+    let store = Store::open(memo_dir());
+    let statcache = Mutex::new(StatCache::load(store.statcache_path()));
+
+    let prep = prepare(argv, &statcache)?;
+
+    // Record last run context for `explain`.
+    let _ = store.record_last(&LastRun {
+        key: prep.key.clone(),
+        cwd: prep.cwd.clone(),
+        argv: prep.argv.clone(),
+        env: current_env(),
+    });
+
+    // Try replay.
+    if !flags.no_read {
+        for (id, entry) in store.load_entries(&prep.key) {
+            if verify_entry(&entry, &statcache) {
+                let r = replay(&store, &entry, flags);
+                store.touch(&prep.key, &id);
+                store.record_hit(entry.duration_ms);
+                save_statcache(&statcache);
+                return r;
+            }
+        }
+    }
+
+    // Miss: launch traced.
+    let code = launch_and_store(&store, &statcache, &prep, flags)?;
+    save_statcache(&statcache);
+    Ok(code)
+}
+
+fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
+    restore_outputs(store, entry)?;
+    replay_console(&decode_console(store, entry));
+    status_line(
+        flags,
+        &format!(
+            "memo \u{26a1} replayed (saved {:.1}s)",
+            entry.duration_ms as f64 / 1000.0
+        ),
+    );
+    Ok(ExitCode::from(clamp_code(entry.exit_code)))
+}
+
+fn launch_and_store(
+    store: &Store,
+    statcache: &Mutex<StatCache>,
+    prep: &Prepared,
+    flags: &Flags,
+) -> Result<ExitCode> {
+    let dll = dll_path()?;
+    let dll_ansi: Vec<u8> = dll.to_string_lossy().bytes().chain(std::iter::once(0)).collect();
+
+    let pipe_name = format!(
+        "\\\\.\\pipe\\memo-{}-{}",
+        std::process::id(),
+        PIPE_COUNTER.fetch_add(1, Ordering::SeqCst)
+    );
+    let run_id = now_filetime() as u64;
+    let payload = RunPayload::new(&pipe_name, run_id);
+
+    let state = std::sync::Arc::new(Mutex::new(RunState::new(
+        &memo_dir(),
+        now_filetime(),
+        flags.allow_network,
+    )));
+
+    let server = PipeServer::start(pipe_name.clone(), state.clone())?;
+
+    let env = current_env();
+    let t0 = std::time::Instant::now();
+    let result = launch(
+        &prep.resolved.app,
+        &prep.resolved.cmdline,
+        &prep.cwd,
+        &dll_ansi,
+        &payload,
+        &env,
+    );
+    let duration_ms = t0.elapsed().as_millis() as u64;
+
+    // Ensure all messages are folded in before finalizing.
+    server.shutdown();
+
+    let result = result?;
+
+    {
+        let mut s = state.lock().unwrap();
+        for pid in &result.new_pids {
+            s.on_new_pid(*pid);
+        }
+        if result.outlived {
+            s.on_taint(
+                memo_proto::TaintReason::Outlived,
+                "a process outlived the command".into(),
+            );
+        }
+    }
+
+    // Store the console log as a blob.
+    let cas = store.cas();
+    let console_bytes = postcard::to_stdvec(&result.console).unwrap_or_default();
+    let console_hash = cas.put_bytes(&console_bytes).unwrap_or([0u8; 32]);
+
+    let finalized = {
+        let mut s = state.lock().unwrap();
+        s.finalize(
+            prep.argv.clone(),
+            prep.cwd.clone(),
+            duration_ms,
+            result.exit_code,
+            console_hash,
+            &cas,
+            flags.cache_failures,
+        )
+    };
+
+    match finalized {
+        Finalized::Cacheable(entry) => {
+            let n_in = entry.inputs.len();
+            let n_out = entry.outputs.len();
+            if store.put_entry(&prep.key, &entry).is_ok() {
+                store.record_store();
+                status_line(
+                    flags,
+                    &format!(
+                        "memo \u{25cf} cached ({:.1}s \u{b7} {} inputs \u{b7} {} outputs)",
+                        duration_ms as f64 / 1000.0,
+                        n_in,
+                        n_out
+                    ),
+                );
+            }
+        }
+        Finalized::Tainted(reasons) => {
+            let reason = reasons
+                .first()
+                .map(|(r, d)| format!("{} ({})", r.human(), d))
+                .unwrap_or_else(|| "unknown".into());
+            status_line(flags, &format!("memo \u{25cb} not cached: {}", reason));
+            if flags.verbose {
+                for (r, d) in &reasons {
+                    eprintln!("  - {}: {}", r.human(), d);
+                }
+            }
+        }
+    }
+
+    Ok(ExitCode::from(clamp_code(result.exit_code)))
+}
+
+fn restore_outputs(store: &Store, entry: &Entry) -> Result<()> {
+    let cas = store.cas();
+
+    // 1. Deletions, deepest path first.
+    let mut deletions: Vec<&str> = entry
+        .outputs
+        .iter()
+        .filter(|o| matches!(o.state, FileState::Absent))
+        .map(|o| o.path.as_str())
+        .collect();
+    deletions.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    for p in deletions {
+        let path = Path::new(p);
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else if path.exists() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    // 2. Directory creations, shallowest first.
+    let mut dirs: Vec<&str> = entry
+        .outputs
+        .iter()
+        .filter(|o| matches!(o.state, FileState::Dir))
+        .map(|o| o.path.as_str())
+        .collect();
+    dirs.sort_by_key(|p| p.len());
+    for p in dirs {
+        std::fs::create_dir_all(p)?;
+    }
+
+    // 3. Files.
+    for o in &entry.outputs {
+        if let FileState::File {
+            content,
+            mtime,
+            readonly,
+            ..
+        } = &o.state
+        {
+            let dest = Path::new(&o.path);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let bytes = cas
+                .read(content)
+                .map_err(|e| anyhow!("missing cached output blob for {}: {}", o.path, e))?;
+            let tmp = dest.with_extension(format!("memo-tmp-{}", std::process::id()));
+            std::fs::write(&tmp, &bytes)?;
+            let _ = std::fs::rename(&tmp, dest).or_else(|_| {
+                let _ = std::fs::remove_file(dest);
+                std::fs::rename(&tmp, dest)
+            });
+            set_file_mtime(dest, *mtime);
+            if *readonly {
+                if let Ok(md) = std::fs::metadata(dest) {
+                    let mut perms = md.permissions();
+                    perms.set_readonly(true);
+                    let _ = std::fs::set_permissions(dest, perms);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn set_file_mtime(path: &Path, filetime: i64) {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::Storage::FileSystem::{SetFileTime, FILE_FLAG_BACKUP_SEMANTICS};
+    use std::os::windows::io::AsRawHandle;
+
+    let file = match std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+    {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    let ft = FILETIME {
+        dwLowDateTime: (filetime as u64 & 0xFFFF_FFFF) as u32,
+        dwHighDateTime: ((filetime as u64 >> 32) & 0xFFFF_FFFF) as u32,
+    };
+    let handle = file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    unsafe {
+        SetFileTime(handle, std::ptr::null(), std::ptr::null(), &ft);
+    }
+}
+
+fn decode_console(store: &Store, entry: &Entry) -> ConsoleLog {
+    store
+        .cas()
+        .read(&entry.console)
+        .ok()
+        .and_then(|b| postcard::from_bytes(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_statcache(statcache: &Mutex<StatCache>) {
+    let _ = statcache.lock().unwrap().save();
+}
+
+fn status_line(flags: &Flags, msg: &str) {
+    if flags.quiet {
+        return;
+    }
+    if std::io::stderr().is_terminal() {
+        eprintln!("{}", msg);
+    }
+}
+
+/// Exit codes above 255 don't fit in ExitCode; clamp while preserving zero/nonzero.
+fn clamp_code(code: i32) -> u8 {
+    if code == 0 {
+        0
+    } else {
+        (code & 0xff) as u8 | if code & 0xff == 0 { 1 } else { 0 }
+    }
+}
+
+pub fn explain(argv: &[String]) -> Result<ExitCode> {
+    if argv.is_empty() {
+        return Err(anyhow!("usage: memo explain <command> ..."));
+    }
+    let store = Store::open(memo_dir());
+    let statcache = Mutex::new(StatCache::load(store.statcache_path()));
+    let prep = prepare(argv, &statcache)?;
+
+    let entries = store.load_entries(&prep.key);
+    if entries.is_empty() {
+        println!("memo: no cached run for this command in this directory");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let (_, entry) = &entries[0];
+    match first_mismatch(entry, &statcache) {
+        None => println!("memo: would replay — all {} inputs match", entry.inputs.len()),
+        Some(inp) => {
+            println!("memo: would miss — first changed input:");
+            println!("  {}", inp.path);
+            println!("  (recorded fingerprint no longer matches the file on disk)");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
