@@ -77,6 +77,38 @@ impl StatCache {
     }
 }
 
+/// Hash a file's content using a shared, mutex-guarded stat cache, holding the
+/// lock only for the cache lookup and insert (never during file I/O). Used by
+/// parallel verification.
+pub fn hash_of_shared(
+    sc: &std::sync::Mutex<StatCache>,
+    path: &Path,
+) -> io::Result<Hash> {
+    let id = PathId::new(&path.to_string_lossy()).0;
+    let sig = file_signature(path)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no signature"))?;
+
+    {
+        let g = sc.lock().unwrap();
+        if let Some((cached_sig, cached_hash)) = g.data.entries.get(&id) {
+            if *cached_sig == sig {
+                return Ok(*cached_hash);
+            }
+        }
+    }
+
+    let content = std::fs::read(path)?;
+    let h: Hash = *blake3::hash(&content).as_bytes();
+
+    {
+        let mut g = sc.lock().unwrap();
+        g.hashed += 1;
+        g.data.entries.insert(id, (sig, h));
+        g.dirty = true;
+    }
+    Ok(h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

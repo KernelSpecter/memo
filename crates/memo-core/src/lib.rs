@@ -7,6 +7,7 @@ pub mod fingerprint;
 pub mod paths;
 pub mod stat;
 pub mod statcache;
+pub mod verify;
 
 /// Cache format version; re-exported from the protocol crate so bumping it in
 /// one place invalidates both wire and on-disk assumptions.

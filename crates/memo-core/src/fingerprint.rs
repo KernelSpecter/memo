@@ -53,6 +53,34 @@ pub struct DirEntry {
     pub mtime: i64,
 }
 
+/// Enumerate a directory into canonical [`DirEntry`] rows. Used by both the run
+/// engine (to snapshot pre-run listings) and verification, so their hashes
+/// agree. Errors (e.g. path is not a directory) propagate.
+pub fn read_dir_entries(dir: &std::path::Path) -> std::io::Result<Vec<DirEntry>> {
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
+
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Use symlink_metadata so a symlink is described as itself, not target.
+        let md = entry.metadata()?;
+        let is_dir = md.is_dir();
+        #[cfg(windows)]
+        let (size, mtime) = (md.file_size(), md.last_write_time() as i64);
+        #[cfg(not(windows))]
+        let (size, mtime) = (md.len(), 0i64);
+        out.push(DirEntry {
+            name,
+            is_dir,
+            size,
+            mtime,
+        });
+    }
+    Ok(out)
+}
+
 /// The pre-run observed state of a path, gathered during the run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreState {
