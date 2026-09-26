@@ -90,6 +90,21 @@ fn main() {
                 let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(200));
                 println!("NET {}", rest);
             }
+            "concat" => {
+                // concat=<a>|<b>|<out>: out = contents(a) ++ contents(b).
+                let parts: Vec<&str> = rest.split('|').collect();
+                let a = std::fs::read(parts[0]).unwrap_or_default();
+                let b = parts
+                    .get(1)
+                    .map(|p| std::fs::read(p).unwrap_or_default())
+                    .unwrap_or_default();
+                let mut out = a.clone();
+                out.extend_from_slice(&b);
+                if let Some(dest) = parts.get(2) {
+                    std::fs::write(dest, &out).unwrap();
+                }
+                println!("CONCAT {} {} {}", a.len(), b.len(), out.len());
+            }
             "print" => {
                 println!("{}", rest);
             }
