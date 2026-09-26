@@ -319,7 +319,9 @@ fn status_line(flags: &Flags, msg: &str) {
     if flags.quiet {
         return;
     }
-    if std::io::stderr().is_terminal() {
+    // Normally only shown on an interactive terminal; MEMO_FORCE_STATUS makes it
+    // unconditional (used by tests and scripts that capture stderr).
+    if std::io::stderr().is_terminal() || std::env::var_os("MEMO_FORCE_STATUS").is_some() {
         eprintln!("{}", msg);
     }
 }
