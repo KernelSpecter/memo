@@ -20,6 +20,14 @@ use windows_sys::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS
 /// This DLL's own module handle, saved so child injection can find its path.
 static SELF_MODULE: OnceLock<usize> = OnceLock::new();
 
+/// The run payload (pipe name + run id), saved so child injection copies the
+/// same payload into children.
+static PAYLOAD: OnceLock<RunPayload> = OnceLock::new();
+
+pub(crate) fn payload() -> Option<&'static RunPayload> {
+    PAYLOAD.get()
+}
+
 pub(crate) fn self_module_path() -> Option<String> {
     let h = *SELF_MODULE.get()? as HMODULE;
     let mut buf = [0u16; 1024];
@@ -82,6 +90,7 @@ fn on_attach(hinst: HMODULE) {
         None => return,
     };
     let pipe_name = rp.pipe_name_string();
+    let _ = PAYLOAD.set(rp);
     let image = current_image_path();
 
     if client::init(&pipe_name, &image) {
