@@ -10,6 +10,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_SHARE_MODE, OPEN_EXISTING,
 };
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 
 thread_local! {
@@ -47,6 +48,62 @@ struct Client {
 unsafe impl Send for Client {}
 
 static CLIENT: OnceLock<Mutex<Client>> = OnceLock::new();
+
+/// Resolved address of `ntdll!RtlDllShutdownInProgress` (0 if it couldn't be
+/// resolved), looked up once. Stored as an address rather than a typed fn
+/// pointer so it fits in a plain `OnceLock` without unsafe Send/Sync impls.
+static RTL_DLL_SHUTDOWN_IN_PROGRESS_ADDR: OnceLock<usize> = OnceLock::new();
+
+/// True only once the process is actually tearing itself down — past
+/// `ExitProcess`'s point of no return, where other threads may already be
+/// gone (possibly while still holding `CLIENT`'s lock) — as opposed to, say,
+/// some *other* DLL in the process calling `FreeLibrary` on itself, which is
+/// normal operation for everyone else.
+///
+/// `RtlDllShutdownInProgress` is an undocumented but long-stable ntdll
+/// export (present since NT4; confirmed present in this environment's
+/// ntdll.dll). It's resolved via `GetModuleHandleW`/`GetProcAddress` — the
+/// same pattern `hooks.rs` already uses for the real NT-API trampolines —
+/// and cached: `GetModuleHandleW("ntdll.dll")` never fails (ntdll is loaded
+/// in every process) and neither call blocks. If the export still can't be
+/// resolved for some reason, this fails safe to `false`: callers then take
+/// the normal, blocking path (never silently dropping a message) rather than
+/// the teardown-only non-blocking one.
+fn shutting_down() -> bool {
+    let addr = *RTL_DLL_SHUTDOWN_IN_PROGRESS_ADDR.get_or_init(|| unsafe {
+        let name: Vec<u16> = "ntdll.dll"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let ntdll = GetModuleHandleW(name.as_ptr());
+        if ntdll.is_null() {
+            return 0;
+        }
+        crate::hooks::proc_addr(ntdll, "RtlDllShutdownInProgress") as usize
+    });
+    if addr == 0 {
+        return false;
+    }
+    type RtlDllShutdownInProgressFn = unsafe extern "system" fn() -> u8;
+    let f: RtlDllShutdownInProgressFn = unsafe { core::mem::transmute(addr as *const ()) };
+    unsafe { f() != 0 }
+}
+
+/// Lock `m`, blocking normally so a message is never silently dropped in
+/// normal operation — except once the process is actually tearing itself
+/// down (see `shutting_down`). At that point every other thread has already
+/// been terminated, so a lock still held can only belong to a thread that no
+/// longer exists to release it: blocking would deadlock forever, and the
+/// message would be lost either way (blocked or dropped). A non-blocking
+/// `try_lock` there is strictly better: same outcome for the message, no
+/// deadlock.
+fn lock(m: &Mutex<Client>) -> Option<std::sync::MutexGuard<'_, Client>> {
+    if shutting_down() {
+        m.try_lock().ok()
+    } else {
+        m.lock().ok()
+    }
+}
 
 /// Connect to memo's pipe and send the initial Hello. Returns false on failure
 /// (the caller then leaves the process untraced; memo will taint via NoHello).
@@ -88,12 +145,9 @@ pub fn is_active() -> bool {
 }
 
 pub fn pid() -> u32 {
-    // try_lock, not lock: this runs on hook paths (including DllMain's
-    // DLL_PROCESS_DETACH), which must never block on a lock that a
-    // now-gone thread may still hold during process teardown.
     CLIENT
         .get()
-        .and_then(|m| m.try_lock().ok().map(|g| g.pid))
+        .and_then(|m| lock(m).map(|g| g.pid))
         .unwrap_or_else(|| unsafe { GetCurrentProcessId() })
 }
 
@@ -136,11 +190,7 @@ pub fn send(msg: Msg) {
     if write_msg(&mut buf, &msg).is_err() {
         return;
     }
-    // try_lock, not lock: a hook path (including DllMain's
-    // DLL_PROCESS_DETACH) must never block waiting for this lock — if
-    // another thread holds it (or held it and is now gone, during process
-    // teardown), just drop the message rather than risk a deadlock.
-    if let Ok(g) = cell.try_lock() {
+    if let Some(g) = lock(cell) {
         let _ = write_all(g.pipe, &buf);
     }
 }
@@ -212,4 +262,30 @@ pub fn bye(exit_ok: bool) {
         pid: pid(),
         exit_ok,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// If `GetProcAddress` ever failed to resolve `RtlDllShutdownInProgress`,
+    /// `shutting_down()` would silently and permanently return `false`
+    /// (fail-safe to "block normally", per its doc comment) and nothing
+    /// would notice. Assert the resolution actually succeeds, and that a
+    /// perfectly normal test process (not shutting down) reports `false`.
+    #[test]
+    fn rtl_dll_shutdown_in_progress_resolves_and_is_false_here() {
+        assert!(
+            !shutting_down(),
+            "this test process is not shutting down, so this must be false"
+        );
+        let addr = *RTL_DLL_SHUTDOWN_IN_PROGRESS_ADDR
+            .get()
+            .expect("shutting_down() above must have resolved and cached the address");
+        assert_ne!(
+            addr, 0,
+            "RtlDllShutdownInProgress must resolve to a real ntdll export, \
+             not the unresolved-export (0) fallback"
+        );
+    }
 }

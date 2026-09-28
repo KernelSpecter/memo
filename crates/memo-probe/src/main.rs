@@ -78,6 +78,39 @@ fn main() {
                 let _ = std::fs::rename(from, to);
                 println!("RENAMED {} {}", from, to);
             }
+            "mtio" => {
+                // mtio=<in>|<out>: races a *normal* (non-abrupt) multithreaded
+                // scenario against memo_hook's CLIENT lock, to check that
+                // hook messages are never silently dropped during ordinary
+                // operation. A writer thread does 50 writes to <out> -- each
+                // write's premutate_wait holds CLIENT across a full ack
+                // round-trip with memo -- while, right after the writer's
+                // first write, this thread does exactly one read of <in>
+                // (one attempt, not a loop: if that single Access::Read were
+                // ever dropped by a contended lock, memo would never learn
+                // <in> is an input, and a later run with <in> changed would
+                // wrongly replay from cache instead of missing).
+                let (in_path, out_path) = rest.split_once('|').unwrap_or((rest, ""));
+                let in_path = in_path.to_string();
+                let out_path = out_path.to_string();
+                let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let started_writer = started.clone();
+                let out_path_writer = out_path.clone();
+                let writer = std::thread::spawn(move || {
+                    for i in 0..50 {
+                        let _ = std::fs::write(&out_path_writer, format!("mtio-{}", i).as_bytes());
+                        if i == 0 {
+                            started_writer.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                });
+                while !started.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                let _ = std::fs::read(&in_path);
+                writer.join().unwrap();
+                println!("MTIO {} {}", in_path, out_path);
+            }
             "threads" => {
                 // threads=<n>: spawn n threads that each hammer a small
                 // (Cargo.toml-sized), hooked file with opens/reads, then the
