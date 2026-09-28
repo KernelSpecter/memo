@@ -166,7 +166,8 @@ pub struct RunOutcome {
 
 impl RunOutcome {
     pub fn cached(&self) -> bool {
-        self.stderr.contains("cached")
+        // Anchored on the glyph: a bare "cached" also matches "not cached".
+        self.stderr.contains("\u{25cf} cached")
     }
     pub fn replayed(&self) -> bool {
         self.stderr.contains("replayed")

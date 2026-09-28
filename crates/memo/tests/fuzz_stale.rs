@@ -43,7 +43,12 @@ fn random_mutations_never_replay_stale() {
     let mut a: Option<Vec<u8>> = None;
     let mut b: Option<Vec<u8>> = None;
 
-    let mut rng = Rng(0x9E3779B97F4A7C15);
+    // MEMO_FUZZ_SEED explores other sequences (must be non-zero for xorshift).
+    let seed = std::env::var("MEMO_FUZZ_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0x9E3779B97F4A7C15);
+    let mut rng = Rng(seed);
     let values: [&[u8]; 4] = [b"", b"x", b"hello", b"a-longer-value-here"];
 
     for step in 0..120u32 {

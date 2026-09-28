@@ -13,6 +13,14 @@ use memo_proto::{AccessKind, MutateKind, TaintReason};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// BLAKE3 of a file's content, streamed so large outputs aren't loaded whole.
+fn hash_file(path: &Path) -> Option<Hash> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(&mut f).ok()?;
+    Some(*hasher.finalize().as_bytes())
+}
+
 #[derive(Default, Clone)]
 struct Obs {
     read: bool,
@@ -128,22 +136,18 @@ impl RunState {
         if self.premutated.contains_key(&id) {
             return;
         }
-        let want_hash = self.obs.get(&id).map(|o| o.read).unwrap_or(false);
+        // Hash even if nothing has read the path yet: a read may come after
+        // this write (cargo reading back the .d file rustc just rewrote), and
+        // what it sees can still depend on the pre-run content (an append).
+        // finalize() uses the hash only if the path was read.
         let snap = match file_signature(Path::new(path)) {
             None => PreSnap::Absent,
             Some(sig) if sig.ftype == FType::Dir => PreSnap::Dir,
-            Some(sig) => {
-                let hash = if want_hash {
-                    std::fs::read(path).ok().map(|b| *blake3::hash(&b).as_bytes())
-                } else {
-                    None
-                };
-                PreSnap::File {
-                    size: sig.size,
-                    mtime: sig.mtime,
-                    hash,
-                }
-            }
+            Some(sig) => PreSnap::File {
+                size: sig.size,
+                mtime: sig.mtime,
+                hash: hash_file(Path::new(path)),
+            },
         };
         self.premutated.insert(id, snap);
     }
@@ -221,11 +225,11 @@ impl RunState {
                     Some(PreSnap::Dir) => PreState::Dir { listing: None },
                     Some(PreSnap::File { size, mtime, hash }) => {
                         if o.read && hash.is_none() {
-                            // Read logged after the mutation snapshot: we can't
-                            // prove pre-content. Stay safe.
+                            // The snapshot couldn't read the pre-run content
+                            // (e.g. locked), so we can't prove what was read.
                             self.taints.push((
                                 TaintReason::InternalError,
-                                format!("read-after-write ordering for {}", path),
+                                format!("could not hash pre-run content of {}", path),
                             ));
                             PreState::File {
                                 size: *size,
@@ -236,7 +240,7 @@ impl RunState {
                             PreState::File {
                                 size: *size,
                                 mtime: if o.meta { Some(*mtime) } else { None },
-                                hash: *hash,
+                                hash: if o.read { *hash } else { None },
                             }
                         }
                     }
@@ -294,7 +298,7 @@ impl RunState {
             }
         }
 
-        // Build outputs from mutated paths whose final state differs from pre.
+        // Build outputs from mutated paths (see needs_output for the skips).
         let mut outputs: Vec<Output> = Vec::new();
         for id in &self.mutated {
             let path = self.spelling.get(id).cloned().unwrap_or_default();
@@ -303,7 +307,7 @@ impl RunState {
             }
             let final_state = current_state(Path::new(&path), cas);
             let pre = self.premutated.get(id);
-            if !state_changed(pre, &final_state) {
+            if !needs_output(pre, self.obs.get(id), &final_state) {
                 continue;
             }
             outputs.push(Output {
@@ -379,17 +383,26 @@ fn current_state(path: &Path, cas: &Cas) -> FileState {
     }
 }
 
-fn state_changed(pre: Option<&PreSnap>, final_state: &FileState) -> bool {
+/// Whether a mutated path's final state must be recorded as an output. It may
+/// be skipped only if it equals the pre-run state *and* an input fingerprint
+/// pins that state, so verification guarantees it holds again at replay time.
+/// A path that was never observed has no input: its replay-time state is
+/// arbitrary, so it is always recorded (e.g. an unread file rewritten with the
+/// same bytes, or a temp file created and deleted during the run).
+fn needs_output(pre: Option<&PreSnap>, obs: Option<&Obs>, final_state: &FileState) -> bool {
+    let Some(o) = obs else { return true };
     match (pre, final_state) {
+        // Inputs pin existence and type.
         (Some(PreSnap::Absent) | None, FileState::Absent) => false,
         (Some(PreSnap::Dir), FileState::Dir) => false,
+        // Content is pinned only if the path was read (hash iff read).
         (
             Some(PreSnap::File {
                 hash: Some(h), ..
             }),
             FileState::File { content, .. },
-        ) => h != content,
-        // Pre content unknown, or type differs: treat as changed (safe).
+        ) => !o.read || h != content,
+        // Type changed, or pre content unknown: record it (safe).
         _ => true,
     }
 }
