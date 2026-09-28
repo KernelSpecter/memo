@@ -35,6 +35,10 @@ struct Obs {
     read: bool,
     meta: bool,
     listed: bool,
+    /// The tree observed this path present (a successful read/probe/list).
+    seen_present: bool,
+    /// The tree observed this path absent (a negative probe).
+    seen_absent: bool,
 }
 
 #[derive(Clone)]
@@ -63,6 +67,9 @@ pub struct RunState {
     /// The listing fingerprint is computed from these at finalize, once the set
     /// of the tree's own mutated names in each directory is known.
     listings: HashMap<PathId, Vec<DirEntry>>,
+    /// Each listed directory's ChangeTime at snapshot time, to detect an external
+    /// change to the directory after the tree enumerated it.
+    listing_ctime: HashMap<PathId, i64>,
     hello_pids: HashSet<u32>,
     new_pids: HashSet<u32>,
     taints: Vec<(TaintReason, String)>,
@@ -107,6 +114,7 @@ impl RunState {
             mutated: HashSet::new(),
             pin_pre: HashSet::new(),
             listings: HashMap::new(),
+            listing_ctime: HashMap::new(),
             hello_pids: HashSet::new(),
             new_pids: HashSet::new(),
             taints: Vec::new(),
@@ -147,9 +155,22 @@ impl RunState {
         let id = self.remember(path);
         let o = self.obs.entry(id).or_default();
         match kind {
-            AccessKind::Read => o.read = true,
-            AccessKind::Probe | AccessKind::ProbeAbsent => o.meta = true,
-            AccessKind::List => o.listed = true,
+            AccessKind::Read => {
+                o.read = true;
+                o.seen_present = true;
+            }
+            AccessKind::Probe => {
+                o.meta = true;
+                o.seen_present = true;
+            }
+            AccessKind::ProbeAbsent => {
+                o.meta = true;
+                o.seen_absent = true;
+            }
+            AccessKind::List => {
+                o.listed = true;
+                o.seen_present = true;
+            }
         }
     }
 
@@ -197,6 +218,9 @@ impl RunState {
         self.obs.entry(id.clone()).or_default().listed = true;
         if self.listings.contains_key(&id) {
             return;
+        }
+        if let Some(sig) = file_signature(Path::new(path)) {
+            self.listing_ctime.insert(id.clone(), sig.change_time);
         }
         match read_dir_entries(Path::new(path)) {
             Ok(entries) => {
@@ -396,7 +420,24 @@ impl RunState {
                     fp: build_input_fp(pre, true),
                 });
             } else {
-                // Not mutated: current state == pre-run state.
+                // Not mutated: current state == pre-run state. First, an external
+                // mid-run change to existence — a path the tree saw present that is
+                // now gone (deleted out from under it), or one it saw absent that
+                // now exists — means we'd record a state the command didn't
+                // observe. Taint rather than pin the wrong existence.
+                let present_now = file_signature(Path::new(&path)).is_some();
+                if o.seen_present && !present_now {
+                    self.taints.push((
+                        TaintReason::ExternalModification,
+                        format!("{} was present but is now gone (external deletion)", path),
+                    ));
+                }
+                if o.seen_absent && present_now {
+                    self.taints.push((
+                        TaintReason::ExternalModification,
+                        format!("{} was absent but now exists (external creation)", path),
+                    ));
+                }
                 match file_signature(Path::new(&path)) {
                     None => {
                         inputs.push(Input {
@@ -405,6 +446,20 @@ impl RunState {
                         });
                     }
                     Some(sig) if sig.ftype == FType::Dir => {
+                        // A directory the tree only listed (didn't write into) whose
+                        // ChangeTime advanced past the snapshot changed externally
+                        // mid-run — the snapshot may not be what the command saw on
+                        // a later enumeration. Taint. (A dir the tree wrote into is
+                        // handled by the name-only listing + next-run convergence.)
+                        if let Some(&snap_ct) = self.listing_ctime.get(id) {
+                            if sig.change_time > snap_ct && self.mutated_names_in(&path).is_empty()
+                            {
+                                self.taints.push((
+                                    TaintReason::ExternalModification,
+                                    format!("{} changed during the run", path),
+                                ));
+                            }
+                        }
                         // Use the pre-run snapshot taken at first enumeration, not
                         // a re-read at finalize (which would include the tree's own
                         // writes into the dir). None if it was never enumerated.
