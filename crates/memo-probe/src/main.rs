@@ -4,6 +4,8 @@
 //! MEMO_PROBE_MARKER is set, it appends one byte to that file — so tests can tell
 //! a real execution (marker grows) from a replay (marker unchanged).
 
+mod ntffi;
+
 use std::io::Write;
 
 fn main() {
@@ -216,6 +218,15 @@ fn main() {
                     }
                 };
                 println!("CTRLC {}", rest);
+            }
+            "qbyname" => {
+                ntffi::query_by_name(rest);
+            }
+            "qdirfile" => {
+                ntffi::query_dir_file(rest);
+            }
+            "ntdelete" => {
+                ntffi::nt_delete(rest);
             }
             "ready" => {
                 // ready=<path>: signal the test (put it under %TEMP%, which

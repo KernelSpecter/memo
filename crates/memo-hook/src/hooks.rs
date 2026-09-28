@@ -25,6 +25,9 @@ static mut REAL_NTSETINFORMATIONFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTDEVICEIOCONTROLFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTFSCONTROLFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTQUERYDIRECTORYFILEEX: *mut c_void = std::ptr::null_mut();
+static mut REAL_NTQUERYDIRECTORYFILE: *mut c_void = std::ptr::null_mut();
+static mut REAL_NTQUERYINFORMATIONBYNAME: *mut c_void = std::ptr::null_mut();
+static mut REAL_NTDELETEFILE: *mut c_void = std::ptr::null_mut();
 
 fn is_not_found(status: NTSTATUS) -> bool {
     status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND
@@ -476,6 +479,106 @@ unsafe extern "system" fn h_ntquerydirectoryfileex(
     status
 }
 
+// ---- NtQueryDirectoryFile (pre-Win8 directory enumeration) ----
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "system" fn h_ntquerydirectoryfile(
+    file_handle: HANDLE,
+    event: HANDLE,
+    apc: *mut c_void,
+    apc_ctx: *mut c_void,
+    iosb: *mut IO_STATUS_BLOCK,
+    info: *mut c_void,
+    length: u32,
+    class: i32,
+    return_single_entry: u8,
+    file_name: *mut UNICODE_STRING,
+    restart_scan: u8,
+) -> NTSTATUS {
+    let real: NtQueryDirectoryFileFn = core::mem::transmute(REAL_NTQUERYDIRECTORYFILE);
+    let guard = client::enter();
+    if guard.is_none() {
+        return real(
+            file_handle,
+            event,
+            apc,
+            apc_ctx,
+            iosb,
+            info,
+            length,
+            class,
+            return_single_entry,
+            file_name,
+            restart_scan,
+        );
+    }
+    let status = real(
+        file_handle,
+        event,
+        apc,
+        apc_ctx,
+        iosb,
+        info,
+        length,
+        class,
+        return_single_entry,
+        file_name,
+        restart_scan,
+    );
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if let Some(dir) = handle_to_win32(file_handle) {
+            client::access(AccessKind::List, dir);
+        }
+    }));
+    status
+}
+
+// ---- NtQueryInformationByName (newer path-based stat) ----
+
+unsafe extern "system" fn h_ntqueryinformationbyname(
+    oa: *mut OBJECT_ATTRIBUTES,
+    iosb: *mut IO_STATUS_BLOCK,
+    info: *mut c_void,
+    length: u32,
+    class: i32,
+) -> NTSTATUS {
+    let real: NtQueryInformationByNameFn = core::mem::transmute(REAL_NTQUERYINFORMATIONBYNAME);
+    let guard = client::enter();
+    if guard.is_none() {
+        return real(oa, iosb, info, length, class);
+    }
+    let status = real(oa, iosb, info, length, class);
+    let _ = catch_unwind(AssertUnwindSafe(|| query_attrs_common(oa, status)));
+    status
+}
+
+// ---- NtDeleteFile (delete by name) ----
+
+unsafe extern "system" fn h_ntdeletefile(oa: *mut OBJECT_ATTRIBUTES) -> NTSTATUS {
+    let real: NtDeleteFileFn = core::mem::transmute(REAL_NTDELETEFILE);
+    let guard = client::enter();
+    if guard.is_none() {
+        return real(oa);
+    }
+    let path = catch_unwind(AssertUnwindSafe(|| match classify_object(oa) {
+        Some(Classified::File(p)) => Some(p),
+        _ => None,
+    }))
+    .unwrap_or(None);
+    if let Some(p) = &path {
+        let _ = catch_unwind(AssertUnwindSafe(|| client::premutate_wait(p.clone())));
+    }
+    let status = real(oa);
+    if status >= 0 {
+        if let Some(p) = path {
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                client::mutate(MutateKind::Delete, p, None)
+            }));
+        }
+    }
+    status
+}
+
 /// NtQueryDirectoryFileEx signature (declared here since it has 10 args).
 pub type NtQueryDirectoryFileExFn = unsafe extern "system" fn(
     HANDLE,
@@ -525,6 +628,9 @@ unsafe fn install_inner() {
     REAL_NTDEVICEIOCONTROLFILE = proc_addr(ntdll, "NtDeviceIoControlFile");
     REAL_NTFSCONTROLFILE = proc_addr(ntdll, "NtFsControlFile");
     REAL_NTQUERYDIRECTORYFILEEX = proc_addr(ntdll, "NtQueryDirectoryFileEx");
+    REAL_NTQUERYDIRECTORYFILE = proc_addr(ntdll, "NtQueryDirectoryFile");
+    REAL_NTQUERYINFORMATIONBYNAME = proc_addr(ntdll, "NtQueryInformationByName");
+    REAL_NTDELETEFILE = proc_addr(ntdll, "NtDeleteFile");
 
     if DetourTransactionBegin() != 0 {
         client::taint(TaintReason::HookInstallFailed, "txn begin");
@@ -563,6 +669,19 @@ unsafe fn install_inner() {
     attach(
         std::ptr::addr_of_mut!(REAL_NTQUERYDIRECTORYFILEEX),
         h_ntquerydirectoryfileex as *const () as *mut c_void,
+    );
+    attach(
+        std::ptr::addr_of_mut!(REAL_NTQUERYDIRECTORYFILE),
+        h_ntquerydirectoryfile as *const () as *mut c_void,
+    );
+    // NtQueryInformationByName is absent on older Windows; attach() no-ops on null.
+    attach(
+        std::ptr::addr_of_mut!(REAL_NTQUERYINFORMATIONBYNAME),
+        h_ntqueryinformationbyname as *const () as *mut c_void,
+    );
+    attach(
+        std::ptr::addr_of_mut!(REAL_NTDELETEFILE),
+        h_ntdeletefile as *const () as *mut c_void,
     );
 
     // Child-process propagation hooks (Task 10).

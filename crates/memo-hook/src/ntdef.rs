@@ -177,3 +177,33 @@ pub type NtDeviceIoControlFileFn = unsafe extern "system" fn(
 ) -> NTSTATUS;
 
 pub type NtFsControlFileFn = NtDeviceIoControlFileFn;
+
+pub type NtDeleteFileFn =
+    unsafe extern "system" fn(ObjectAttributes: *mut OBJECT_ATTRIBUTES) -> NTSTATUS;
+
+/// Newer path-based stat (Rust std, Python 3.12+, Win11 GetFileInformationByName).
+/// May be absent on older Windows — resolve defensively.
+pub type NtQueryInformationByNameFn = unsafe extern "system" fn(
+    ObjectAttributes: *mut OBJECT_ATTRIBUTES,
+    IoStatusBlock: *mut IO_STATUS_BLOCK,
+    FileInformation: *mut c_void,
+    Length: u32,
+    FileInformationClass: i32,
+) -> NTSTATUS;
+
+/// Directory enumeration (the pre-Win8 form; libuv/Node's readdir and .NET call
+/// it directly). Same shape as the Ex form but with ReturnSingleEntry / FileName
+/// filter / RestartScan instead of the Ex flags word.
+pub type NtQueryDirectoryFileFn = unsafe extern "system" fn(
+    FileHandle: HANDLE,
+    Event: HANDLE,
+    ApcRoutine: *mut c_void,
+    ApcContext: *mut c_void,
+    IoStatusBlock: *mut IO_STATUS_BLOCK,
+    FileInformation: *mut c_void,
+    Length: u32,
+    FileInformationClass: i32,
+    ReturnSingleEntry: u8,
+    FileName: *mut UNICODE_STRING,
+    RestartScan: u8,
+) -> NTSTATUS;
