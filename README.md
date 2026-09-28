@@ -127,7 +127,9 @@ normally but aren't stored (`-v` shows why):
 - a 32-bit (WOW64) child process, or any child the hook couldn't be injected into;
 - creating a junction or other reparse point, or opening a file by its ID;
 - a file the command read being modified by something else during the run;
-- a process outliving the command by more than 2 s (the tree is then killed).
+- a process outliving the command by more than 2 s (the tree is then killed);
+- a write under `%SystemRoot%` (reads there are ignored, and a write the OS
+  denies doesn't count).
 
 Ctrl+C stops memo along with the command, and an interrupted run is never cached.
 
@@ -141,8 +143,8 @@ Things it **can't** see:
 - wall-clock time and randomness;
 - registry reads;
 - metadata read through a handle that was already open;
-- anything under an ignored path: `%TEMP%`/`%TMP%`, `%SystemRoot%`, memo's own
-  cache, `%LOCALAPPDATA%\npm-cache\_logs` and `MEMO_IGNORE`;
+- anything under an ignored path: `%TEMP%`/`%TMP%`, `%SystemRoot%` (reads), memo's
+  own cache, `%LOCALAPPDATA%\npm-cache\_logs` and `MEMO_IGNORE`;
 - 8.3 short-name aliases of a path;
 - communication with processes outside the tree, other than over the network.
 

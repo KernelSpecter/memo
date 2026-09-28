@@ -49,6 +49,12 @@ fn main() {
                 std::fs::write(path, text.as_bytes()).unwrap();
                 println!("WROTE {} {}", path, text.len());
             }
+            "trywrite" => {
+                // Like write, but a failure is reported instead of panicking.
+                let (path, text) = rest.split_once('|').unwrap_or((rest, ""));
+                let ok = std::fs::write(path, text.as_bytes()).is_ok();
+                println!("TRYWROTE {} {}", path, ok);
+            }
             "append" => {
                 let (path, text) = rest.split_once('|').unwrap_or((rest, ""));
                 let mut f = std::fs::OpenOptions::new()

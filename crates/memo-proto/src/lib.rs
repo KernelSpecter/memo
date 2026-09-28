@@ -111,6 +111,7 @@ pub enum TaintReason {
     Interrupted,
     NonZeroExit,
     InternalError,
+    SystemWrite,
 }
 
 impl TaintReason {
@@ -128,6 +129,7 @@ impl TaintReason {
             TaintReason::Interrupted => "the command was interrupted",
             TaintReason::NonZeroExit => "the command exited non-zero",
             TaintReason::InternalError => "an internal memo error",
+            TaintReason::SystemWrite => "wrote under %SystemRoot%",
         }
     }
 }

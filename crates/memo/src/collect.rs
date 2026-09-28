@@ -13,6 +13,14 @@ use memo_proto::{AccessKind, MutateKind, TaintReason};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// Whether normalized, lowercased `path` is `prefix` or inside it.
+fn under(prefix: &str, path: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('\\'))
+}
+
 /// BLAKE3 of a file's content, streamed so large outputs aren't loaded whole.
 fn hash_file(path: &Path) -> Option<Hash> {
     let mut f = std::fs::File::open(path).ok()?;
@@ -49,6 +57,8 @@ pub struct RunState {
     taints: Vec<(TaintReason, String)>,
     run_start: i64,
     ignore_prefixes: Vec<String>,
+    /// %SystemRoot%: reads there are ignored, writes taint.
+    system_root: Option<String>,
     allow_network: bool,
 }
 
@@ -62,18 +72,14 @@ pub enum Finalized {
 
 impl RunState {
     pub fn new(memo_dir: &Path, run_start: i64, allow_network: bool) -> Self {
-        let mut ignore = Vec::new();
-        let mut add = |v: Option<String>| {
-            if let Some(s) = v {
-                let n = memo_core::paths::normalize(&s).to_lowercase();
-                if !n.is_empty() {
-                    ignore.push(n);
-                }
-            }
+        let prefix = |s: &str| {
+            let n = memo_core::paths::normalize(s).to_lowercase();
+            (!n.is_empty()).then_some(n)
         };
+        let mut ignore = Vec::new();
+        let mut add = |v: Option<String>| ignore.extend(v.as_deref().and_then(prefix));
         add(std::env::var("TEMP").ok());
         add(std::env::var("TMP").ok());
-        add(std::env::var("SystemRoot").ok());
         add(Some(memo_dir.to_string_lossy().into_owned()));
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             add(Some(format!("{}\\npm-cache\\_logs", local)));
@@ -93,15 +99,24 @@ impl RunState {
             taints: Vec::new(),
             run_start,
             ignore_prefixes: ignore,
+            system_root: std::env::var("SystemRoot").ok().as_deref().and_then(prefix),
             allow_network,
         }
     }
 
+    /// Neither an input nor an output: under an ignored prefix or %SystemRoot%.
     fn ignored(&self, path: &str) -> bool {
         let n = memo_core::paths::normalize(path).to_lowercase();
-        self.ignore_prefixes
-            .iter()
-            .any(|pre| n == *pre || n.starts_with(&format!("{}\\", pre)))
+        self.ignore_prefixes.iter().any(|pre| under(pre, &n))
+            || self.system_root.as_deref().is_some_and(|sr| under(sr, &n))
+    }
+
+    /// A mutation under %SystemRoot% (and not under another ignored prefix,
+    /// e.g. a %TEMP% inside it) changes machine state replay can't restore.
+    fn system_write(&self, path: &str) -> bool {
+        let n = memo_core::paths::normalize(path).to_lowercase();
+        self.system_root.as_deref().is_some_and(|sr| under(sr, &n))
+            && !self.ignore_prefixes.iter().any(|pre| under(pre, &n))
     }
 
     fn remember(&mut self, path: &str) -> PathId {
@@ -153,6 +168,11 @@ impl RunState {
     }
 
     pub fn on_mutate(&mut self, _kind: MutateKind, path: &str, target: Option<&str>) {
+        for p in std::iter::once(path).chain(target) {
+            if self.system_write(p) {
+                self.taints.push((TaintReason::SystemWrite, p.to_string()));
+            }
+        }
         if !self.ignored(path) {
             let id = self.remember(path);
             self.mutated.insert(id);

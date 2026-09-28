@@ -76,12 +76,16 @@ fn post_open(path: Option<String>, is_mut: bool, by_id: bool, desired: u32, stat
         return;
     }
     if is_mut {
-        let kind = if desired & DELETE != 0 {
-            MutateKind::Delete
-        } else {
-            MutateKind::Write
-        };
-        client::mutate(kind, path, None);
+        // Only an open that succeeded (NT_SUCCESS) can have changed anything.
+        // The PreMutate snapshot already marked the path as possibly mutated.
+        if status >= 0 {
+            let kind = if desired & DELETE != 0 {
+                MutateKind::Delete
+            } else {
+                MutateKind::Write
+            };
+            client::mutate(kind, path, None);
+        }
         return;
     }
     if status == STATUS_SUCCESS {

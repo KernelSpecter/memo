@@ -139,11 +139,24 @@ impl Sandbox {
     }
 
     pub fn run_with_flags(&self, memo_flags: &[&str], ops: &[&str]) -> RunOutcome {
+        self.run_with_env(memo_flags, &[], ops)
+    }
+
+    /// Run memo with extra environment variables (seen by memo and the probe).
+    pub fn run_with_env(
+        &self,
+        memo_flags: &[&str],
+        env: &[(&str, &str)],
+        ops: &[&str],
+    ) -> RunOutcome {
         let mut cmd = Command::new(memo_exe());
         cmd.current_dir(&self.work);
         cmd.env("MEMO_DIR", &self.cache);
         cmd.env("MEMO_PROBE_MARKER", &self.marker);
         cmd.env("MEMO_FORCE_STATUS", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
         for f in memo_flags {
             cmd.arg(f);
         }
