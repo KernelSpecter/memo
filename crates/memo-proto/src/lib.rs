@@ -88,12 +88,30 @@ pub enum AccessKind {
 /// A path mutation that may make the run produce that path as an output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MutateKind {
+    /// In-place / random-access write (FILE_OPEN, FILE_OPEN_IF, FILE_OVERWRITE):
+    /// the result can depend on the file's pre-run content, so it is pinned.
     Write,
+    /// Create-or-replace (FILE_SUPERSEDE, FILE_OVERWRITE_IF): the prior content is
+    /// discarded and the output is fully restored from cache, so the target's
+    /// pre-run state is NOT pinned as an input (unless the tree also read it).
+    Truncate,
+    /// Exclusive create (FILE_CREATE): fails if the target exists, so pre-run
+    /// absence is pinned.
     Create,
     Delete,
     Rename,
     SetMeta,
     MkDir,
+}
+
+impl MutateKind {
+    /// Whether a mutation of this kind requires the path's pre-run state to be
+    /// pinned as an input (so the run misses if that pre-state no longer holds).
+    /// A pure truncating create-or-replace does not: its output is restored from
+    /// cache and its behavior does not depend on what was there before.
+    pub fn pins_pre_state(&self) -> bool {
+        !matches!(self, MutateKind::Truncate)
+    }
 }
 
 /// Why a run cannot be cached.

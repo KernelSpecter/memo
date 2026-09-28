@@ -70,7 +70,14 @@ unsafe fn pre_open(
 }
 
 /// Report the observation after a real open, based on status and access.
-fn post_open(path: Option<String>, is_mut: bool, by_id: bool, desired: u32, status: NTSTATUS) {
+fn post_open(
+    path: Option<String>,
+    is_mut: bool,
+    by_id: bool,
+    desired: u32,
+    disposition: u32,
+    status: NTSTATUS,
+) {
     let path = match path {
         Some(p) => p,
         None => return,
@@ -84,13 +91,24 @@ fn post_open(path: Option<String>, is_mut: bool, by_id: bool, desired: u32, stat
             let is_delete = desired & DELETE != 0;
             let kind = if is_delete {
                 MutateKind::Delete
-            } else {
+            } else if disposition == FILE_CREATE {
+                // Exclusive create: fails if the target exists → pin absence.
+                MutateKind::Create
+            } else if disposition == FILE_OPEN || disposition == FILE_OVERWRITE {
+                // Fail if the target is absent → the open succeeding pins that it
+                // existed. (Content is pinned only if the tree also read it.)
                 MutateKind::Write
+            } else {
+                // FILE_SUPERSEDE / FILE_OPEN_IF / FILE_OVERWRITE_IF: succeed whether
+                // or not the target existed, and the output is restored from cache,
+                // so pin nothing about the target unless the tree read it. This is
+                // the path std's File::create takes (OPEN_IF + separate truncate).
+                MutateKind::Truncate
             };
             // A write whose result can depend on the pre-run content — a
-            // read-write handle, or an append (which preserves the prefix) —
-            // is also reported as a Read so finalize pins the pre-run content.
-            // A truncating write or a delete does not read prior content.
+            // read-write handle, or an append (which preserves the prefix) — is
+            // also reported as a Read so finalize pins the pre-run content. A
+            // truncating write or a delete does not read prior content.
             if !is_delete && desired & (READ_ACCESS_MASK | FILE_APPEND_DATA) != 0 {
                 client::access(AccessKind::Read, path.clone());
             }
@@ -163,7 +181,7 @@ unsafe extern "system" fn h_ntcreatefile(
         ealen,
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        post_open(pre.0, pre.1, pre.2, desired, status)
+        post_open(pre.0, pre.1, pre.2, desired, disposition, status)
     }));
     status
 }
@@ -190,7 +208,7 @@ unsafe extern "system" fn h_ntopenfile(
     .unwrap_or((None, false, false));
     let status = real(file_handle, desired, oa, iosb, share, options);
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        post_open(pre.0, pre.1, pre.2, desired, status)
+        post_open(pre.0, pre.1, pre.2, desired, FILE_OPEN, status)
     }));
     status
 }

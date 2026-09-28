@@ -52,6 +52,10 @@ pub struct RunState {
     spelling: HashMap<PathId, String>,
     premutated: HashMap<PathId, PreSnap>,
     mutated: HashSet<PathId>,
+    /// Mutated paths whose pre-run state must be pinned as an input (every
+    /// mutation except a pure truncating create-or-replace). A subset of
+    /// `mutated`: a Truncate-only path is an output but not an input.
+    pin_pre: HashSet<PathId>,
     hello_pids: HashSet<u32>,
     new_pids: HashSet<u32>,
     taints: Vec<(TaintReason, String)>,
@@ -94,6 +98,7 @@ impl RunState {
             spelling: HashMap::new(),
             premutated: HashMap::new(),
             mutated: HashSet::new(),
+            pin_pre: HashSet::new(),
             hello_pids: HashSet::new(),
             new_pids: HashSet::new(),
             taints: Vec::new(),
@@ -171,20 +176,27 @@ impl RunState {
         self.premutated.insert(id, snap);
     }
 
-    pub fn on_mutate(&mut self, _kind: MutateKind, path: &str, target: Option<&str>) {
+    pub fn on_mutate(&mut self, kind: MutateKind, path: &str, target: Option<&str>) {
         for p in std::iter::once(path).chain(target) {
             if self.system_write(p) {
                 self.taints.push((TaintReason::SystemWrite, p.to_string()));
             }
         }
+        let pins = kind.pins_pre_state();
         if !self.ignored(path) {
             let id = self.remember(path);
-            self.mutated.insert(id);
+            self.mutated.insert(id.clone());
+            if pins {
+                self.pin_pre.insert(id);
+            }
         }
         if let Some(t) = target {
             if !self.ignored(t) {
                 let id = self.remember(t);
-                self.mutated.insert(id);
+                self.mutated.insert(id.clone());
+                if pins {
+                    self.pin_pre.insert(id);
+                }
             }
         }
     }
@@ -239,10 +251,25 @@ impl RunState {
                 .push((TaintReason::NonZeroExit, format!("exit code {}", exit_code)));
         }
 
-        // Build inputs from observed paths.
+        // Build inputs from every observed OR mutated path. A path the tree only
+        // mutated (never read/probed/listed) must still pin its pre-run state, or
+        // the next run would replay regardless of whether that path now exists or
+        // differs — e.g. a pure create, an append, a rename source, a delete.
         let mut inputs: Vec<Input> = Vec::new();
-        for (id, o) in &self.obs {
+        let empty = Obs::default();
+        let ids: Vec<PathId> = {
+            let mut set: HashSet<PathId> = HashSet::new();
+            for id in self.obs.keys().chain(self.pin_pre.iter()) {
+                set.insert(id.clone());
+            }
+            set.into_iter().collect()
+        };
+        for id in &ids {
             let path = self.spelling.get(id).cloned().unwrap_or_default();
+            if path.is_empty() {
+                continue;
+            }
+            let o = self.obs.get(id).unwrap_or(&empty);
             let mutated = self.mutated.contains(id);
             if mutated {
                 // Pre-run state from the snapshot.

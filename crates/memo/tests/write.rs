@@ -47,8 +47,38 @@ fn rename_output_restored() {
     sb.write("src.txt", b"payload");
     let _ = std::fs::remove_file(sb.path("dst.txt"));
     let r2 = sb.run(&[&op]);
-    assert!(r2.replayed() || r2.cached(), "stderr: {}", r2.stderr);
+    assert!(
+        r2.replayed(),
+        "restored pre-run state should replay; stderr: {}",
+        r2.stderr
+    );
     assert!(sb.path("dst.txt").exists(), "renamed target restored");
+    assert!(!sb.path("src.txt").exists(), "source removed on replay");
+}
+
+#[test]
+fn rename_with_missing_source_does_not_replay() {
+    // The rename source's pre-run existence is pinned: if it's gone, a real run
+    // would rename nothing, so replaying (and recreating dst from cache) is stale.
+    let sb = Sandbox::new("rename_missing_src");
+    sb.write("src.txt", b"payload");
+    let src = abs(&sb.path("src.txt"));
+    let dst = abs(&sb.path("dst.txt"));
+    let op = format!("rename={}|{}", src, dst);
+
+    let r1 = sb.run(&[&op]);
+    assert!(r1.cached(), "stderr: {}", r1.stderr);
+
+    // Both gone: the source no longer exists.
+    let _ = std::fs::remove_file(sb.path("src.txt"));
+    let _ = std::fs::remove_file(sb.path("dst.txt"));
+    let r2 = sb.run(&[&op]);
+    assert!(
+        r2.executed,
+        "rename with a missing source must miss, not replay a stale dst; stderr: {}",
+        r2.stderr
+    );
+    assert!(!sb.path("dst.txt").exists(), "no stale dst created");
 }
 
 #[test]
@@ -63,10 +93,14 @@ fn delete_output_restored() {
     assert!(r1.cached(), "stderr: {}", r1.stderr);
     assert!(!sb.path("victim.txt").exists());
 
-    // Recreate the victim; replay must delete it again (Absent output).
+    // Recreate the victim with identical content; replay must delete it again.
     sb.write("victim.txt", b"bye");
     let r2 = sb.run(&[&op]);
-    assert!(r2.replayed() || r2.cached(), "stderr: {}", r2.stderr);
+    assert!(
+        r2.replayed(),
+        "restored pre-run state should replay; stderr: {}",
+        r2.stderr
+    );
     assert!(
         !sb.path("victim.txt").exists(),
         "replay must re-delete the file"
