@@ -1,212 +1,200 @@
 # memo
 
-Zero-config command result caching for Windows.
+memo caches the result of any Windows command and replays it when nothing the
+command depended on has changed. There is nothing to configure. You put `memo`
+in front of a command and run it as usual.
 
 ```
 > memo cargo test
-   ...
-memo ● cached (41.2s · 1204 inputs · 38 outputs)
+   ... runs for real, 41.2s ...
+memo cached (41.2s, 1204 inputs, 38 outputs)
 
 > memo cargo test
-   ...
-memo ⚡ replayed (saved 41.2s)
+memo replayed (saved 41.2s)
 ```
 
-`memo <any command>` runs the command while tracing the file I/O of its whole
-process tree. When you run the same command again and nothing it depended on
-has changed, memo replays the recorded console output, restores the files the
-command produced and exits with the recorded exit code, all without running it.
-Think Bazel-grade action caching without BUILD files.
+The second run did not run `cargo test`. memo replayed the recorded output,
+restored the files the command wrote, and exited with the same code.
 
-memo's one rule: **never replay a stale result.** A false miss (re-running when a
-replay would have been fine) costs you seconds. A false hit (replaying when a
-real run would differ) would destroy trust, so whenever memo can't fully observe
-a run, it runs the command normally and doesn't cache it, and it tells you why.
+## What it does
 
-## How it works
+When you run `memo <command>`, memo runs the command once and watches every file
+the whole process tree reads, checks for, lists, and writes. It records those
+files as the inputs and outputs of that run.
 
-memo starts the command suspended and injects `memo_hook.dll` using
-[Microsoft Detours](https://github.com/microsoft/Detours). The DLL propagates to
-every child process and reports each file the tree **reads**, **probes** (checks
-for existence or metadata, including paths that turn out not to exist), **lists**
-and **writes**. After the run memo fingerprints every input (content hash for
-files that were read, metadata for files that were only probed, entry list for
-directories that were listed) and stores the outputs in a content-addressed
-cache.
+The next time you run the same command in the same directory with the same
+environment, memo checks the recorded inputs against the files on disk. If they
+all still match, it replays the recorded result instead of running the command.
 
-On the next run of the same command line, in the same directory and with the
-same environment, memo checks the recorded inputs against the current state. If
-every one still matches, the run is replayed.
+The one rule memo never breaks: it will not replay a stale result. If it cannot
+fully observe what a run did, it runs the command normally and does not cache it.
+A needless re-run costs you a few seconds. A wrong replay would cost you trust,
+so memo always errs toward running again.
 
 ## Requirements
 
-- Windows 10 1809+ or Windows 11, x86-64. No admin rights needed.
-- To build: Rust stable with the MSVC toolchain (pinned in `rust-toolchain.toml`).
+- Windows 10 (version 1809 or newer) or Windows 11, 64-bit.
+- No administrator rights.
+- To build it: Rust (stable) with the MSVC toolchain. The exact toolchain is
+  pinned in `rust-toolchain.toml`, so `rustup` picks it up automatically.
 
 ## Install
+
+Build the release binaries:
 
 ```
 cargo build --release -p memo -p memo-hook
 ```
 
-Copy `target\release\memo.exe` **and** `target\release\memo_hook.dll` into the
-same directory on your `PATH`. memo looks for the DLL next to its own exe. Both
-are built with a static CRT, so they have no runtime dependencies.
+This produces two files in `target\release`:
 
-## Usage
+- `memo.exe`
+- `memo_hook.dll`
+
+Copy both of them into the same folder, and put that folder on your `PATH`.
+memo.exe looks for memo_hook.dll next to itself, so the two must stay together.
+Both are built with the static C runtime, so there is nothing else to install.
+
+## Use it
 
 ```
-memo [flags] <command> [args...]    run through the cache
-memo -- <command> [args...]         for a command named like a subcommand
-memo explain <command> [args...]    why the last run missed / would miss
-memo stats                          cache size, entries, hits, time saved
-memo gc [--max-size SIZE]           evict least-recently-used entries (e.g. 2G, 500M)
-memo clear                          delete the whole cache
+memo <command> [args...]        run through the cache
+memo -- <command> [args...]     use this if the command name looks like a memo subcommand
+memo explain <command> ...      say why the last run did or did not replay
+memo stats                      show cache size, entry count, hits, and time saved
+memo gc --max-size 2G           delete least-recently-used entries down to a size limit
+memo clear                      delete the whole cache
 ```
 
-| Flag | Effect |
+Flags:
+
+| Flag | What it does |
 | --- | --- |
-| `--cache-failures` | also cache runs that exit non-zero |
+| `--cache-failures` | also cache runs that exit with a non-zero code |
 | `--allow-network` | cache even if the command used the network |
-| `--no-color-env` | don't force color env vars (see below) |
-| `--no-read` | always run for real, but still record a fresh entry |
+| `--no-color-env` | do not set the color environment variables described below |
+| `--no-read` | always run the command, but still record a fresh entry |
 | `-q`, `--quiet` | no status line |
 | `-v`, `--verbose` | print every reason a run was not cached |
 
-The status line goes to stderr, and only when stderr is a console:
+memo prints one status line to standard error, but only when standard error is a
+console:
 
-- `memo ⚡ replayed (saved 41.2s)`: nothing relevant changed.
-- `memo ● cached (41.2s · 1204 inputs · 38 outputs)`: ran for real and stored.
-- `memo ○ not cached: network access (AFD connect/send)`: ran for real, not
-  stored, with the reason.
+- `memo replayed (saved 41.2s)` means nothing relevant changed.
+- `memo cached (41.2s, 1204 inputs, 38 outputs)` means it ran for real and stored the result.
+- `memo not cached: network access (AFD connect/send)` means it ran for real and did not store it, with the reason.
 
-memo exits with the command's exit code, real or replayed. It exits 125 only if
-the command couldn't be started at all.
+memo exits with the command's own exit code, whether the command ran or was
+replayed. It exits 125 only when it could not start the command at all.
 
 ### Environment variables
 
-| Variable | Effect |
+| Variable | What it does |
 | --- | --- |
-| `MEMO_DIR` | cache location (default `%LOCALAPPDATA%\memo`) |
-| `MEMO_IGNORE` | `;`-separated path prefixes that are neither inputs nor outputs |
-| `MEMO_FORCE_STATUS` | print the status line even when stderr is redirected |
+| `MEMO_DIR` | where the cache lives (default: `%LOCALAPPDATA%\memo`) |
+| `MEMO_IGNORE` | extra path prefixes to ignore, separated by `;` |
+| `MEMO_HOOK_DLL` | a custom path to memo_hook.dll (mostly for testing) |
 
 ### Colors
 
-memo captures output through pipes, so the command sees a non-terminal and many
-tools turn colors off. When memo's own stdout is a console, it sets
-`FORCE_COLOR=1`, `CLICOLOR_FORCE=1`, `CARGO_TERM_COLOR=always` and `PY_COLORS=1`
-for the command, unless they're already set or you pass `--no-color-env`. The
-environment is part of the cache key, so runs in a terminal and redirected runs
-are cached separately.
+memo captures a command's output through pipes, so the command sees something
+that is not a real terminal, and many tools turn colors off. When memo's own
+output is going to a real console, memo turns colors back on for the command by
+setting `FORCE_COLOR=1`, `CLICOLOR_FORCE=1`, `CARGO_TERM_COLOR=always`, and
+`PY_COLORS=1`, unless you already set them or pass `--no-color-env`. These
+variables are part of the cache key, so a run in a terminal and the same run with
+output redirected to a file are cached separately.
 
-## Good to know
+## Things worth knowing
 
-**Some commands need two real runs before they replay.** Tools that read their own
-previous outputs, such as Python's `.pyc` files, cargo's fingerprints, pytest's
-cache and tools that clean `dist/`, see different inputs on the second run than
-on the first: run 1's outputs are now there. After the second run they replay
+**Some commands need two real runs before they replay.** Tools that read their
+own previous output, like Python's `.pyc` files, cargo's fingerprints, and
+anything that writes into a folder it also lists, see different inputs the second
+time (the first run's output is now there). After the second run they replay
 steadily.
 
-```
-memo python -m unittest    ● cached      (writes __pycache__)
-memo python -m unittest    ● cached      (now reads __pycache__)
-memo python -m unittest    ⚡ replayed
-```
+**Editing a file the command read forces a re-run. Touching it does not.** Files
+that were read are compared by content, so changing only a timestamp still
+replays. Files that were only checked for existence or size are compared by that,
+so changing one of those does force a re-run.
 
-**Editing a file the command read forces a re-run; touching it doesn't.** Files
-that were read are fingerprinted by content, so a new timestamp alone still
-replays. Files that were only probed are fingerprinted by size and mtime, so
-touching one of those does force a re-run.
+**memo does not cache a run when it cannot vouch for it.** These runs still
+execute normally, they just are not stored. Run with `-v` to see the reason:
 
-**memo won't cache a run when it can't vouch for it.** These runs execute
-normally but aren't stored (`-v` shows why):
+- the command used the network (a connect or a send). Use `--allow-network` to cache anyway.
+- the command exited with a non-zero code. Use `--cache-failures` to cache anyway.
+- a 32-bit child process ran, or a child that memo could not trace.
+- the command created a junction or other reparse point, or opened a file by its ID.
+- a file the command read was changed by something else while the command ran.
+- a process outlived the command by more than 2 seconds. It keeps running; the run just is not cached. memo never kills your background processes.
+- the command wrote under `%SystemRoot%`.
 
-- network access: a connect or a send (`--allow-network` overrides this);
-- a non-zero exit code (`--cache-failures` overrides this);
-- a 32-bit (WOW64) child process, or any child the hook couldn't be injected into;
-- creating a junction or other reparse point, or opening a file by its ID;
-- a file the command read being modified by something else during the run;
-- a process outliving the command by more than 2 s (it keeps running; the run
-  just isn't cached — memo never kills your background processes);
-- a write under `%SystemRoot%` (reads there are ignored, and a write the OS
-  denies doesn't count).
+Pressing Ctrl+C (or Ctrl+Break) stops the command the usual way. memo stays up,
+passes the command's output and exit code through, and does not cache an
+interrupted run.
 
-Ctrl+C (or Ctrl+Break) goes to the command as usual. memo stays alive, passes
-the command's output and exit code through, and never caches an interrupted
-run, even if the command handles the interrupt and exits 0.
+### What memo cannot see
 
-### Blind spots
+memo replays only when every file the command read has the same content, every
+path it checked has the same existence, type, and size, and every folder it
+listed has the same entries. It cannot see these things, so do not run a command
+through memo if its result depends on one of them:
 
-memo replays only if every file the command read has byte-identical content,
-every path it probed has the same existence, type and size (and mtime, unless the
-command itself wrote it), and every directory it listed has the same entries.
-Things it **can't** see:
+- the current time or random numbers
+- registry reads
+- file metadata read through a handle that was already open
+- anything under an ignored path: `%TEMP%`, `%TMP%`, `%SystemRoot%`, memo's own cache, `%LOCALAPPDATA%\npm-cache\_logs`, and anything in `MEMO_IGNORE`
+- 8.3 short-name aliases of a path
+- talking to another process that is not part of the command's own process tree, except over the network
 
-- wall-clock time and randomness;
-- registry reads;
-- metadata read through a handle that was already open;
-- anything under an ignored path: `%TEMP%`/`%TMP%`, `%SystemRoot%` (reads), memo's
-  own cache, `%LOCALAPPDATA%\npm-cache\_logs` and `MEMO_IGNORE`;
-- 8.3 short-name aliases of a path;
-- communication with processes outside the tree, other than over the network.
+### Limits
 
-If a command's result depends on one of these, don't run it through memo, or add
-whatever it depends on to its command line or environment so it becomes part of
-the key.
+- 64-bit only. A 32-bit child process is detected and run without tracing.
+- No pseudo-console support yet. The command's input and output go through pipes,
+  and its standard input is empty, so fully interactive commands do not work
+  under memo.
+- The cache is on your machine only. There is no shared or remote cache.
+- For a `.cmd` or `.bat` command, memo quotes each argument so cmd special
+  characters (`& | < > ( ) ^`) are passed through as text, but an argument that
+  contains `%VAR%` is still expanded by cmd. That is a limit of the Windows
+  command line, not of memo.
 
-### Limitations
+## How it works, briefly
 
-- x86-64 only; no ARM64. 32-bit child processes are detected and run untraced.
-- No pseudo-console capture yet: the command's stdout and stderr are pipes, and
-  its stdin is `NUL`, so interactive commands won't work under memo.
-- The cache is local; there's no remote or shared cache.
-- For a `.cmd`/`.bat` command, memo quotes each argument so cmd metacharacters
-  (`& | < > ( ) ^`) are passed through literally, but an argument containing
-  `%VAR%` is still expanded by cmd (a Windows command-line limitation).
-
-## Measured
-
-From `scripts\smoke.ps1` on the fixture projects in `scripts\fixtures`. These
-fixtures are deliberately tiny, so what matters is the replay time, not the
-absolute savings.
-
-| Workload | First real run | Replay | Real runs before first replay |
-| --- | --- | --- | --- |
-| `node build.js` | 1.69 s | 0.02 s | 1 |
-| `node --test` | 0.27 s | 0.02 s | 1 |
-| `python -m unittest` | 0.31 s | 0.03 s | 2 (`.pyc`) |
-| `cargo test --offline` | 1.03 s | 0.07 s | 2 (fingerprints) |
+memo starts the command in a suspended state and injects `memo_hook.dll` into it
+using [Microsoft Detours](https://github.com/microsoft/Detours). The DLL follows
+the command into every child process and reports each file operation back to
+memo.exe over a private pipe. memo fingerprints the inputs, stores the outputs in
+a content-addressed folder, and records the console output and exit code. On a
+later run it checks the fingerprints and, if they match, restores everything
+without starting the command.
 
 ## Development
 
 ```
-cargo test --workspace                                         # unit + integration tests
-powershell -ExecutionPolicy Bypass -File scripts\smoke.ps1     # real toolchains
+cargo test --workspace
+powershell -ExecutionPolicy Bypass -File scripts\smoke.ps1
 ```
 
-The integration tests (`crates/memo/tests`) run the real `memo.exe` and hook
-against `memo-probe`, a scripted fixture that performs file, process and socket
-operations on request. `fuzz_stale` applies random mutation sequences and checks
-every result against a real run; set `MEMO_FUZZ_SEED` to explore other sequences.
+The integration tests run the real `memo.exe` and hook against `memo-probe`, a
+small test program that performs file, process, and socket operations on request.
+`scripts\smoke.ps1` runs real toolchains (node, node --test, python, cargo)
+through memo and checks that each one converges to a replay with identical output,
+and that editing a source file forces a real run. It skips a toolchain that is
+not installed and never installs anything.
 
-`smoke.ps1` runs `node`, `node --test`, `python -m unittest`, `pytest`,
-`cargo test` and `tsc` through memo. It checks that each command converges to a
-replay with identical output and that editing a source file forces a real run.
-It also checks that a Node connect-only check is never cached. It skips
-toolchains that aren't installed and never installs anything itself.
-
-| Crate | Role |
+| Crate | What it is |
 | --- | --- |
-| `memo` | the CLI: launch, pipe server, run finalization, replay |
-| `memo-hook` | the injected DLL: file, process and socket hooks |
-| `memo-core` | paths, fingerprints, verification, content-addressed store |
-| `memo-proto` | hook ↔ memo wire protocol |
-| `memo-detours` | builds the vendored Detours and exposes its FFI |
-| `memo-probe` | test fixture |
+| `memo` | the command-line tool: launch, pipe server, finalize, replay |
+| `memo-hook` | the injected DLL: file, process, and socket hooks |
+| `memo-core` | paths, fingerprints, verification, the content-addressed store |
+| `memo-proto` | the messages the hook and memo send each other |
+| `memo-detours` | builds the vendored Detours library and exposes it to Rust |
+| `memo-probe` | the test fixture |
 
-Design: `docs/superpowers/specs/2026-09-26-memo-design.md`.
+The design notes are in `docs/superpowers/specs/2026-09-26-memo-design.md`.
 
 ## License
 
-MIT. Microsoft Detours is vendored under `vendor/detours` under its MIT license.
+MIT. Microsoft Detours is included under `vendor/detours` under its own MIT
+license.
