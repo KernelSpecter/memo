@@ -1,0 +1,11 @@
+[package]
+name = "memo-smoke-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone workspace: smoke.ps1 copies this crate under the memo repo's
+# target/ dir, and without this cargo would claim it for the parent workspace.
+[workspace]
+
+[dependencies]

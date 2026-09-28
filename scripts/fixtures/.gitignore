@@ -1,0 +1,6 @@
+# Artifacts from running a fixture in place (smoke.ps1 runs copies under target/).
+dist/
+target/
+Cargo.lock
+__pycache__/
+.pytest_cache/
