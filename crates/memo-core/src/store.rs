@@ -84,6 +84,11 @@ impl Store {
                 Err(_) => continue,
             };
             match Entry::decode(&bytes) {
+                Some(e) if e.format != crate::FORMAT_VERSION => {
+                    // Written under older (possibly unsafe) fingerprint rules:
+                    // never replay it — drop it.
+                    let _ = fs::remove_file(&path);
+                }
                 Some(e) => {
                     let mtime = ent
                         .metadata()
@@ -345,6 +350,26 @@ fn count_all_files(dir: &Path) -> (u64, u64) {
 mod tests {
     use super::*;
     use crate::entry::Entry;
+
+    #[test]
+    fn entries_from_an_older_format_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path());
+        let mut old = mk_entry("old");
+        old.format = crate::FORMAT_VERSION - 1;
+        store.put_entry("k", &old).unwrap();
+        assert!(
+            store.load_entries("k").is_empty(),
+            "an entry from an older format must not be loaded"
+        );
+        let cur = mk_entry("cur");
+        store.put_entry("k", &cur).unwrap();
+        assert_eq!(
+            store.load_entries("k").len(),
+            1,
+            "current-format entries load"
+        );
+    }
 
     fn mk_entry(tag: &str) -> Entry {
         Entry {

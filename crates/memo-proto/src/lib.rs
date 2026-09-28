@@ -7,7 +7,7 @@ use std::io::{self, Read, Write};
 
 /// Cache format version. Bumping invalidates all stored entries and any
 /// in-flight protocol assumptions.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Fixed-size POD payload copied into a target process via
 /// `DetourCopyPayloadToProcess`. Tells the hook which pipe to connect to.
