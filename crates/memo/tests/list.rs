@@ -21,7 +21,11 @@ fn listing_then_new_file_misses() {
     // A new external file appears in the listed dir → miss.
     sb.write("d/b.txt", b"b");
     let r3 = sb.run(&[&format!("list={}", d)]);
-    assert!(r3.executed, "new file in listed dir must miss; stderr: {}", r3.stderr);
+    assert!(
+        r3.executed,
+        "new file in listed dir must miss; stderr: {}",
+        r3.stderr
+    );
 }
 
 #[test]
@@ -48,5 +52,9 @@ fn listed_dir_churn_from_own_output_still_hits() {
     );
     // Run 3 should be a stable replay.
     let r3 = sb.run(&ops_ref);
-    assert!(!r3.executed, "should converge to replay; stderr: {}", r3.stderr);
+    assert!(
+        !r3.executed,
+        "should converge to replay; stderr: {}",
+        r3.stderr
+    );
 }

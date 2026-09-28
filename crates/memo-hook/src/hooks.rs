@@ -119,13 +119,35 @@ unsafe extern "system" fn h_ntcreatefile(
     let guard = client::enter();
     if guard.is_none() {
         return real(
-            file_handle, desired, oa, iosb, alloc, attrs, share, disposition, options, ea, ealen,
+            file_handle,
+            desired,
+            oa,
+            iosb,
+            alloc,
+            attrs,
+            share,
+            disposition,
+            options,
+            ea,
+            ealen,
         );
     }
-    let pre = catch_unwind(AssertUnwindSafe(|| pre_open(oa, desired, disposition, options)))
-        .unwrap_or((None, false, false));
+    let pre = catch_unwind(AssertUnwindSafe(|| {
+        pre_open(oa, desired, disposition, options)
+    }))
+    .unwrap_or((None, false, false));
     let status = real(
-        file_handle, desired, oa, iosb, alloc, attrs, share, disposition, options, ea, ealen,
+        file_handle,
+        desired,
+        oa,
+        iosb,
+        alloc,
+        attrs,
+        share,
+        disposition,
+        options,
+        ea,
+        ealen,
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
         post_open(pre.0, pre.1, pre.2, desired, status)
@@ -149,8 +171,10 @@ unsafe extern "system" fn h_ntopenfile(
         return real(file_handle, desired, oa, iosb, share, options);
     }
     // NtOpenFile never creates; disposition is effectively FILE_OPEN.
-    let pre = catch_unwind(AssertUnwindSafe(|| pre_open(oa, desired, FILE_OPEN, options)))
-        .unwrap_or((None, false, false));
+    let pre = catch_unwind(AssertUnwindSafe(|| {
+        pre_open(oa, desired, FILE_OPEN, options)
+    }))
+    .unwrap_or((None, false, false));
     let status = real(file_handle, desired, oa, iosb, share, options);
     let _ = catch_unwind(AssertUnwindSafe(|| {
         post_open(pre.0, pre.1, pre.2, desired, status)
@@ -285,8 +309,10 @@ unsafe extern "system" fn h_ntsetinformationfile(
     if guard.is_none() {
         return real(file_handle, iosb, info, length, class);
     }
-    let pending = catch_unwind(AssertUnwindSafe(|| set_info_pre(file_handle, info, length, class)))
-        .unwrap_or(None);
+    let pending = catch_unwind(AssertUnwindSafe(|| {
+        set_info_pre(file_handle, info, length, class)
+    }))
+    .unwrap_or(None);
     let status = real(file_handle, iosb, info, length, class);
     if status == STATUS_SUCCESS {
         if let Some((kind, path, target)) = pending {
@@ -315,7 +341,16 @@ unsafe extern "system" fn h_ntdeviceiocontrolfile(
     let guard = client::enter();
     if guard.is_none() {
         return real(
-            file_handle, event, apc, apc_ctx, iosb, ioctl, in_buf, in_len, out_buf, out_len,
+            file_handle,
+            event,
+            apc,
+            apc_ctx,
+            iosb,
+            ioctl,
+            in_buf,
+            in_len,
+            out_buf,
+            out_len,
         );
     }
     if matches!(
@@ -327,7 +362,16 @@ unsafe extern "system" fn h_ntdeviceiocontrolfile(
         }));
     }
     real(
-        file_handle, event, apc, apc_ctx, iosb, ioctl, in_buf, in_len, out_buf, out_len,
+        file_handle,
+        event,
+        apc,
+        apc_ctx,
+        iosb,
+        ioctl,
+        in_buf,
+        in_len,
+        out_buf,
+        out_len,
     )
 }
 
@@ -350,7 +394,16 @@ unsafe extern "system" fn h_ntfscontrolfile(
     let guard = client::enter();
     if guard.is_none() {
         return real(
-            file_handle, event, apc, apc_ctx, iosb, ioctl, in_buf, in_len, out_buf, out_len,
+            file_handle,
+            event,
+            apc,
+            apc_ctx,
+            iosb,
+            ioctl,
+            in_buf,
+            in_len,
+            out_buf,
+            out_len,
         );
     }
     if matches!(ioctl, FSCTL_SET_REPARSE_POINT | FSCTL_DELETE_REPARSE_POINT) {
@@ -359,7 +412,16 @@ unsafe extern "system" fn h_ntfscontrolfile(
         }));
     }
     real(
-        file_handle, event, apc, apc_ctx, iosb, ioctl, in_buf, in_len, out_buf, out_len,
+        file_handle,
+        event,
+        apc,
+        apc_ctx,
+        iosb,
+        ioctl,
+        in_buf,
+        in_len,
+        out_buf,
+        out_len,
     )
 }
 
@@ -382,11 +444,29 @@ unsafe extern "system" fn h_ntquerydirectoryfileex(
     let guard = client::enter();
     if guard.is_none() {
         return real(
-            file_handle, event, apc, apc_ctx, iosb, info, length, class, flags, file_name,
+            file_handle,
+            event,
+            apc,
+            apc_ctx,
+            iosb,
+            info,
+            length,
+            class,
+            flags,
+            file_name,
         );
     }
     let status = real(
-        file_handle, event, apc, apc_ctx, iosb, info, length, class, flags, file_name,
+        file_handle,
+        event,
+        apc,
+        apc_ctx,
+        iosb,
+        info,
+        length,
+        class,
+        flags,
+        file_name,
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
         if let Some(dir) = handle_to_win32(file_handle) {
@@ -427,7 +507,10 @@ pub fn install() {
 unsafe fn install_inner() {
     use memo_detours::*;
 
-    let ntdll_name: Vec<u16> = "ntdll.dll".encode_utf16().chain(std::iter::once(0)).collect();
+    let ntdll_name: Vec<u16> = "ntdll.dll"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let ntdll = GetModuleHandleW(ntdll_name.as_ptr());
     if ntdll.is_null() {
         client::taint(TaintReason::HookInstallFailed, "no ntdll");
@@ -451,7 +534,10 @@ unsafe fn install_inner() {
     }
     DetourUpdateThread(windows_sys::Win32::System::Threading::GetCurrentThread());
 
-    attach(&mut REAL_NTCREATEFILE, h_ntcreatefile as usize as *mut c_void);
+    attach(
+        &mut REAL_NTCREATEFILE,
+        h_ntcreatefile as usize as *mut c_void,
+    );
     attach(&mut REAL_NTOPENFILE, h_ntopenfile as usize as *mut c_void);
     attach(
         &mut REAL_NTQUERYATTRIBUTESFILE,

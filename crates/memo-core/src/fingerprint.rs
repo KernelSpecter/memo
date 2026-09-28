@@ -86,7 +86,9 @@ pub fn read_dir_entries(dir: &std::path::Path) -> std::io::Result<Vec<DirEntry>>
 pub enum PreState {
     Absent,
     /// `listing` present iff the directory was enumerated.
-    Dir { listing: Option<ListingFp> },
+    Dir {
+        listing: Option<ListingFp>,
+    },
     /// `mtime`/`hash` are `Some` iff metadata / content were observed.
     File {
         size: u64,
@@ -222,9 +224,24 @@ mod tests {
 
     fn entries() -> Vec<DirEntry> {
         vec![
-            DirEntry { name: "b.txt".into(), is_dir: false, size: 2, mtime: 20 },
-            DirEntry { name: "a.txt".into(), is_dir: false, size: 1, mtime: 10 },
-            DirEntry { name: "sub".into(), is_dir: true, size: 0, mtime: 5 },
+            DirEntry {
+                name: "b.txt".into(),
+                is_dir: false,
+                size: 2,
+                mtime: 20,
+            },
+            DirEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 1,
+                mtime: 10,
+            },
+            DirEntry {
+                name: "sub".into(),
+                is_dir: true,
+                size: 0,
+                mtime: 5,
+            },
         ]
     }
 
@@ -242,32 +259,61 @@ mod tests {
     #[test]
     fn listing_excludes_mutated_entries() {
         // Directory that a command lists, then creates out.js into.
-        let pre = vec![
-            DirEntry { name: "a.txt".into(), is_dir: false, size: 1, mtime: 10 },
-        ];
+        let pre = vec![DirEntry {
+            name: "a.txt".into(),
+            is_dir: false,
+            size: 1,
+            mtime: 10,
+        }];
         let mut mutated = HashSet::new();
         mutated.insert("out.js".to_string());
         let fp = compute_listing_fp(&pre, &mutated);
 
         // On the next run the directory also contains out.js (left by run 1).
         let after = vec![
-            DirEntry { name: "a.txt".into(), is_dir: false, size: 1, mtime: 10 },
-            DirEntry { name: "out.js".into(), is_dir: false, size: 99, mtime: 55 },
+            DirEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 1,
+                mtime: 10,
+            },
+            DirEntry {
+                name: "out.js".into(),
+                is_dir: false,
+                size: 99,
+                mtime: 55,
+            },
         ];
         let recomputed = recompute_listing_hash(&after, &fp.stripped);
-        assert_eq!(fp.hash, recomputed, "the command's own output must not disturb the listing");
+        assert_eq!(
+            fp.hash, recomputed,
+            "the command's own output must not disturb the listing"
+        );
     }
 
     #[test]
     fn listing_detects_external_new_file() {
-        let pre = vec![
-            DirEntry { name: "a.txt".into(), is_dir: false, size: 1, mtime: 10 },
-        ];
+        let pre = vec![DirEntry {
+            name: "a.txt".into(),
+            is_dir: false,
+            size: 1,
+            mtime: 10,
+        }];
         let fp = compute_listing_fp(&pre, &HashSet::new());
         // An unrelated file appears (not one of the command's outputs).
         let after = vec![
-            DirEntry { name: "a.txt".into(), is_dir: false, size: 1, mtime: 10 },
-            DirEntry { name: "intruder".into(), is_dir: false, size: 3, mtime: 30 },
+            DirEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 1,
+                mtime: 10,
+            },
+            DirEntry {
+                name: "intruder".into(),
+                is_dir: false,
+                size: 3,
+                mtime: 30,
+            },
         ];
         let recomputed = recompute_listing_hash(&after, &fp.stripped);
         assert_ne!(fp.hash, recomputed);

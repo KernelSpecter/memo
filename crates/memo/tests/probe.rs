@@ -22,7 +22,11 @@ fn positive_probe_then_delete_misses() {
     // Delete the probed file → existence changed → miss.
     std::fs::remove_file(sb.path("f.txt")).unwrap();
     let r3 = sb.run(&[&format!("probe={}", f)]);
-    assert!(r3.executed, "deleting a probed file must miss; stderr: {}", r3.stderr);
+    assert!(
+        r3.executed,
+        "deleting a probed file must miss; stderr: {}",
+        r3.stderr
+    );
     assert!(r3.stdout.contains("false"));
 }
 
@@ -42,6 +46,10 @@ fn negative_probe_then_create_misses() {
     // Create the previously-absent file → miss.
     sb.write("ghost.txt", b"now here");
     let r3 = sb.run(&[&format!("probe={}", f)]);
-    assert!(r3.executed, "creating a probed-absent file must miss; stderr: {}", r3.stderr);
+    assert!(
+        r3.executed,
+        "creating a probed-absent file must miss; stderr: {}",
+        r3.stderr
+    );
     assert!(r3.stdout.contains("true"));
 }

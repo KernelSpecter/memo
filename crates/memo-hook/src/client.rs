@@ -4,7 +4,9 @@
 use core::cell::Cell;
 use memo_proto::{write_msg, AccessKind, Msg, MutateKind, TaintReason};
 use std::sync::{Mutex, OnceLock};
-use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_SHARE_MODE, OPEN_EXISTING,
 };
@@ -116,15 +118,7 @@ fn write_all(pipe: HANDLE, bytes: &[u8]) -> bool {
 fn read_one_byte(pipe: HANDLE) -> bool {
     let mut b = [0u8; 1];
     let mut read: u32 = 0;
-    let ok = unsafe {
-        ReadFile(
-            pipe,
-            b.as_mut_ptr(),
-            1,
-            &mut read,
-            std::ptr::null_mut(),
-        )
-    };
+    let ok = unsafe { ReadFile(pipe, b.as_mut_ptr(), 1, &mut read, std::ptr::null_mut()) };
     ok != 0 && read == 1
 }
 

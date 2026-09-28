@@ -13,11 +13,18 @@ pub struct Flags {
 #[derive(Debug, Clone)]
 pub enum Command {
     /// Run (and possibly replay) a command.
-    Run { argv: Vec<String>, flags: Flags },
+    Run {
+        argv: Vec<String>,
+        flags: Flags,
+    },
     /// Explain why the last run of a command missed / would miss.
-    Explain { argv: Vec<String> },
+    Explain {
+        argv: Vec<String>,
+    },
     Stats,
-    Gc { max_bytes: Option<u64> },
+    Gc {
+        max_bytes: Option<u64>,
+    },
     Clear,
     Help,
 }
@@ -33,7 +40,10 @@ fn parse_size(s: &str) -> Option<u64> {
     } else {
         (s, 1)
     };
-    num.trim().parse::<f64>().ok().map(|v| (v * mult as f64) as u64)
+    num.trim()
+        .parse::<f64>()
+        .ok()
+        .map(|v| (v * mult as f64) as u64)
 }
 
 /// Parse argv (excluding argv[0]).
@@ -121,7 +131,12 @@ mod tests {
 
     #[test]
     fn flags_before_command() {
-        let c = parse(&["--allow-network".into(), "-v".into(), "node".into(), "x.js".into()]);
+        let c = parse(&[
+            "--allow-network".into(),
+            "-v".into(),
+            "node".into(),
+            "x.js".into(),
+        ]);
         match c {
             Command::Run { argv, flags } => {
                 assert_eq!(argv, vec!["node", "x.js"]);

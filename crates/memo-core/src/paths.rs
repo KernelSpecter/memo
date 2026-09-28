@@ -76,10 +76,7 @@ impl VolumeMap {
     /// Build from explicit pairs (used in tests).
     pub fn from_pairs(pairs: &[(&str, char)]) -> Self {
         VolumeMap {
-            entries: pairs
-                .iter()
-                .map(|(d, c)| (d.to_lowercase(), *c))
-                .collect(),
+            entries: pairs.iter().map(|(d, c)| (d.to_lowercase(), *c)).collect(),
         }
     }
 
@@ -97,9 +94,8 @@ impl VolumeMap {
                 .chain(std::iter::once(0))
                 .collect();
             let mut target = [0u16; 512];
-            let n = unsafe {
-                QueryDosDeviceW(wide.as_ptr(), target.as_mut_ptr(), target.len() as u32)
-            };
+            let n =
+                unsafe { QueryDosDeviceW(wide.as_ptr(), target.as_mut_ptr(), target.len() as u32) };
             if n > 0 {
                 // The result may contain multiple NUL-separated strings; take
                 // the first.
@@ -121,10 +117,7 @@ impl VolumeMap {
     /// Resolve a `\Device\HarddiskVolumeN`-style prefix to a drive letter.
     pub fn device_to_drive(&self, device: &str) -> Option<char> {
         let dl = device.to_lowercase();
-        self.entries
-            .iter()
-            .find(|(d, _)| *d == dl)
-            .map(|(_, c)| *c)
+        self.entries.iter().find(|(d, _)| *d == dl).map(|(_, c)| *c)
     }
 }
 
@@ -310,17 +303,26 @@ mod tests {
 
     #[test]
     fn named_pipe_is_device() {
-        assert_eq!(from_nt("\\Device\\NamedPipe\\foo", &vols()), Classified::Device);
+        assert_eq!(
+            from_nt("\\Device\\NamedPipe\\foo", &vols()),
+            Classified::Device
+        );
     }
 
     #[test]
     fn condrv_is_device() {
-        assert_eq!(from_nt("\\Device\\ConDrv\\Console", &vols()), Classified::Device);
+        assert_eq!(
+            from_nt("\\Device\\ConDrv\\Console", &vols()),
+            Classified::Device
+        );
     }
 
     #[test]
     fn afd_socket_is_device() {
-        assert_eq!(from_nt("\\Device\\Afd\\Endpoint", &vols()), Classified::Device);
+        assert_eq!(
+            from_nt("\\Device\\Afd\\Endpoint", &vols()),
+            Classified::Device
+        );
     }
 
     #[test]

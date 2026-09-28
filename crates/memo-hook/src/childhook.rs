@@ -92,12 +92,7 @@ unsafe fn inject(h_process: HANDLE) -> bool {
 
 /// Handle a created child: inject unless WOW64, report, resume unless the caller
 /// asked for a suspended child.
-unsafe fn handle_child(
-    h_process: HANDLE,
-    h_thread: HANDLE,
-    child_pid: u32,
-    original_flags: u32,
-) {
+unsafe fn handle_child(h_process: HANDLE, h_thread: HANDLE, child_pid: u32, original_flags: u32) {
     let mut process_machine: u16 = 0;
     let mut native_machine: u16 = 0;
     let wow64 = IsWow64Process2(h_process, &mut process_machine, &mut native_machine) != 0
@@ -136,10 +131,24 @@ unsafe extern "system" fn h_createprocessw(
     if guard.is_none() {
         return real(app, cmd, pa, ta, inherit, flags, env, dir, si, pi);
     }
-    let ok = real(app, cmd, pa, ta, inherit, flags | CREATE_SUSPENDED, env, dir, si, pi);
+    let ok = real(
+        app,
+        cmd,
+        pa,
+        ta,
+        inherit,
+        flags | CREATE_SUSPENDED,
+        env,
+        dir,
+        si,
+        pi,
+    );
     if ok == 0 {
         let e = windows_sys::Win32::Foundation::GetLastError();
-        client::taint(TaintReason::InternalError, &format!("CreateProcessW failed err={}", e));
+        client::taint(
+            TaintReason::InternalError,
+            &format!("CreateProcessW failed err={}", e),
+        );
         return ok;
     }
     if !pi.is_null() {
@@ -167,7 +176,18 @@ unsafe extern "system" fn h_createprocessa(
     if guard.is_none() {
         return real(app, cmd, pa, ta, inherit, flags, env, dir, si, pi);
     }
-    let ok = real(app, cmd, pa, ta, inherit, flags | CREATE_SUSPENDED, env, dir, si, pi);
+    let ok = real(
+        app,
+        cmd,
+        pa,
+        ta,
+        inherit,
+        flags | CREATE_SUSPENDED,
+        env,
+        dir,
+        si,
+        pi,
+    );
     if ok != 0 && !pi.is_null() {
         let info = &*pi;
         let (hp, ht, id) = (info.hProcess, info.hThread, info.dwProcessId);

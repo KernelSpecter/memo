@@ -15,7 +15,11 @@ fn overwrite_then_read_existing_file_is_cached_and_converges() {
 
     let r1 = sb.run(&ops_ref);
     assert!(r1.executed, "stderr: {}", r1.stderr);
-    assert!(r1.cached(), "run 1 must be cacheable; stderr: {}", r1.stderr);
+    assert!(
+        r1.cached(),
+        "run 1 must be cacheable; stderr: {}",
+        r1.stderr
+    );
 
     // dep.d now holds the run's own output; pre-run state differs from run 1's.
     let r2 = sb.run(&ops_ref);
@@ -23,7 +27,11 @@ fn overwrite_then_read_existing_file_is_cached_and_converges() {
     assert!(r2.cached(), "stderr: {}", r2.stderr);
 
     let r3 = sb.run(&ops_ref);
-    assert!(r3.replayed(), "run 3 must converge to a replay; stderr: {}", r3.stderr);
+    assert!(
+        r3.replayed(),
+        "run 3 must converge to a replay; stderr: {}",
+        r3.stderr
+    );
     assert!(!r3.executed);
 }
 
@@ -46,7 +54,11 @@ fn identical_rewrite_of_unread_output_is_still_restored() {
     sb.write("out.bin", b"junk");
     let r3 = sb.run(&[&op]);
     assert!(r3.replayed(), "stderr: {}", r3.stderr);
-    assert_eq!(std::fs::read(sb.path("out.bin")).unwrap(), b"hello", "replay left a stale output");
+    assert_eq!(
+        std::fs::read(sb.path("out.bin")).unwrap(),
+        b"hello",
+        "replay left a stale output"
+    );
 }
 
 #[test]
@@ -55,13 +67,20 @@ fn append_then_read_misses_when_pre_run_content_changes() {
     let log = abs(&sb.path("log.txt"));
     let copy = abs(&sb.path("copy.txt"));
     // copy.txt = pre-run log.txt ++ "B": depends on the pre-run *content*.
-    let ops = [format!("append={}|B", log), format!("concat={}||{}", log, copy)];
+    let ops = [
+        format!("append={}|B", log),
+        format!("concat={}||{}", log, copy),
+    ];
     let ops_ref: Vec<&str> = ops.iter().map(|s| s.as_str()).collect();
 
     sb.write("log.txt", b"AAAA");
     let r1 = sb.run(&ops_ref);
     assert!(r1.executed, "stderr: {}", r1.stderr);
-    assert!(r1.cached(), "run 1 must be cacheable; stderr: {}", r1.stderr);
+    assert!(
+        r1.cached(),
+        "run 1 must be cacheable; stderr: {}",
+        r1.stderr
+    );
     assert_eq!(std::fs::read(sb.path("copy.txt")).unwrap(), b"AAAAB");
 
     // Same pre-run content as run 1 → replay restores run 1's outputs.
@@ -74,6 +93,10 @@ fn append_then_read_misses_when_pre_run_content_changes() {
     // would be stale.
     sb.write("log.txt", b"ZZZZ");
     let r3 = sb.run(&ops_ref);
-    assert!(r3.executed, "must not replay after pre-run content changed; stderr: {}", r3.stderr);
+    assert!(
+        r3.executed,
+        "must not replay after pre-run content changed; stderr: {}",
+        r3.stderr
+    );
     assert_eq!(std::fs::read(sb.path("copy.txt")).unwrap(), b"ZZZZB");
 }

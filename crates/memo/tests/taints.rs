@@ -28,7 +28,11 @@ fn connectex_is_network_access() {
     let sb = Sandbox::new("taint_connectex");
     let r1 = sb.run(&["connectex=127.0.0.1:9"]);
     assert_eq!(r1.exit, 0, "stderr: {}", r1.stderr);
-    assert!(r1.not_cached(), "ConnectEx must taint; stderr: {}", r1.stderr);
+    assert!(
+        r1.not_cached(),
+        "ConnectEx must taint; stderr: {}",
+        r1.stderr
+    );
 }
 
 /// Creating and binding a socket issues AFD requests (bind, set-context,
@@ -38,7 +42,11 @@ fn connectex_is_network_access() {
 fn socket_bind_without_connect_is_cached() {
     let sb = Sandbox::new("taint_bind_only");
     let r1 = sb.run(&["bind=127.0.0.1:0"]);
-    assert!(r1.cached(), "bind alone is not network access; stderr: {}", r1.stderr);
+    assert!(
+        r1.cached(),
+        "bind alone is not network access; stderr: {}",
+        r1.stderr
+    );
     let r2 = sb.run(&["bind=127.0.0.1:0"]);
     assert!(r2.replayed(), "stderr: {}", r2.stderr);
 }

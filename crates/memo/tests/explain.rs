@@ -28,7 +28,11 @@ fn explain_reports_replay_then_first_mismatch() {
     sb.write("a.txt", b"changed");
     let e2 = sb.explain(&[&op]);
     assert!(e2.stdout.contains("would miss"), "stdout: {:?}", e2.stdout);
-    assert!(e2.stdout.contains("a.txt"), "should name the changed file: {:?}", e2.stdout);
+    assert!(
+        e2.stdout.contains("a.txt"),
+        "should name the changed file: {:?}",
+        e2.stdout
+    );
 }
 
 #[test]
@@ -46,7 +50,9 @@ fn stats_reports_hits_and_stores() {
     assert!(s.stdout.contains("hits:"), "stdout: {:?}", s.stdout);
     // At least one store and one hit recorded.
     assert!(
-        s.stdout.lines().any(|l| l.starts_with("stores:") && !l.contains(" 0")),
+        s.stdout
+            .lines()
+            .any(|l| l.starts_with("stores:") && !l.contains(" 0")),
         "expected a nonzero store count: {:?}",
         s.stdout
     );

@@ -104,8 +104,8 @@ pub fn resolve(argv: &[String]) -> anyhow::Result<ResolvedCommand> {
         anyhow::bail!("no command given");
     }
     let program = &argv[0];
-    let resolved = which(program)
-        .ok_or_else(|| anyhow::anyhow!("command not found on PATH: {}", program))?;
+    let resolved =
+        which(program).ok_or_else(|| anyhow::anyhow!("command not found on PATH: {}", program))?;
 
     let ext = resolved
         .extension()
@@ -115,7 +115,8 @@ pub fn resolve(argv: &[String]) -> anyhow::Result<ResolvedCommand> {
 
     if ext == "cmd" || ext == "bat" {
         // Route through cmd.exe. cmd needs the whole thing as one /c argument.
-        let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string());
+        let comspec = std::env::var("ComSpec")
+            .unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string());
         // Rebuild argv with the resolved script path in slot 0.
         let mut full = argv.to_vec();
         full[0] = resolved.to_string_lossy().into_owned();

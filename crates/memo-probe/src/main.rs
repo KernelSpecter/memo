@@ -140,8 +140,9 @@ fn connect_ex(addr: &str) {
     use windows_sys::Win32::Networking::WinSock::*;
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
-    let target: std::net::SocketAddrV4 =
-        addr.parse().unwrap_or_else(|_| "127.0.0.1:9".parse().unwrap());
+    let target: std::net::SocketAddrV4 = addr
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1:9".parse().unwrap());
     unsafe {
         let mut wsa: WSADATA = zeroed();
         WSAStartup(0x0202, &mut wsa);
@@ -149,7 +150,11 @@ fn connect_ex(addr: &str) {
         // ConnectEx requires a bound socket.
         let mut local: SOCKADDR_IN = zeroed();
         local.sin_family = AF_INET;
-        bind(s, &local as *const _ as *const SOCKADDR, size_of::<SOCKADDR_IN>() as i32);
+        bind(
+            s,
+            &local as *const _ as *const SOCKADDR,
+            size_of::<SOCKADDR_IN>() as i32,
+        );
 
         let guid: GUID = WSAID_CONNECTEX;
         let mut connect_ex: LPFN_CONNECTEX = None;

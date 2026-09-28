@@ -103,6 +103,9 @@ mod tests {
 
     #[test]
     fn run_slot_ignores_env() {
-        assert_eq!(run_slot("C:\\p", &["x".into()]), run_slot("C:\\p", &["x".into()]));
+        assert_eq!(
+            run_slot("C:\\p", &["x".into()]),
+            run_slot("C:\\p", &["x".into()])
+        );
     }
 }

@@ -80,10 +80,7 @@ impl StatCache {
 /// Hash a file's content using a shared, mutex-guarded stat cache, holding the
 /// lock only for the cache lookup and insert (never during file I/O). Used by
 /// parallel verification.
-pub fn hash_of_shared(
-    sc: &std::sync::Mutex<StatCache>,
-    path: &Path,
-) -> io::Result<Hash> {
+pub fn hash_of_shared(sc: &std::sync::Mutex<StatCache>, path: &Path) -> io::Result<Hash> {
     let id = PathId::new(&path.to_string_lossy()).0;
     let sig = file_signature(path)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no signature"))?;

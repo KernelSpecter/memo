@@ -76,15 +76,21 @@ fn random_mutations_never_replay_stale() {
         let r = sb.run(&[&op]);
         assert_eq!(r.exit, 0, "step {}: exit; stderr {}", step, r.stderr);
         assert_eq!(
-            r.stdout, exp_stdout,
+            r.stdout,
+            exp_stdout,
             "step {}: stdout mismatch (replayed={}, executed={})",
-            step, r.replayed(), r.executed
+            step,
+            r.replayed(),
+            r.executed
         );
         let got_out = std::fs::read(sb.path("out.bin")).unwrap_or_default();
         assert_eq!(
-            got_out, exp_out,
+            got_out,
+            exp_out,
             "step {}: OUTPUT FILE MISMATCH — stale replay! (replayed={}, executed={})",
-            step, r.replayed(), r.executed
+            step,
+            r.replayed(),
+            r.executed
         );
     }
 }

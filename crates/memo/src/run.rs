@@ -29,7 +29,10 @@ fn dll_path() -> Result<std::path::PathBuf> {
         .ok_or_else(|| anyhow!("cannot locate memo.exe directory"))?;
     let dll = dir.join("memo_hook.dll");
     if !dll.exists() {
-        return Err(anyhow!("memo_hook.dll not found next to memo.exe at {}", dll.display()));
+        return Err(anyhow!(
+            "memo_hook.dll not found next to memo.exe at {}",
+            dll.display()
+        ));
     }
     Ok(dll)
 }
@@ -133,7 +136,11 @@ fn launch_and_store(
     flags: &Flags,
 ) -> Result<ExitCode> {
     let dll = dll_path()?;
-    let dll_ansi: Vec<u8> = dll.to_string_lossy().bytes().chain(std::iter::once(0)).collect();
+    let dll_ansi: Vec<u8> = dll
+        .to_string_lossy()
+        .bytes()
+        .chain(std::iter::once(0))
+        .collect();
 
     let pipe_name = format!(
         "\\\\.\\pipe\\memo-{}-{}",
@@ -301,9 +308,9 @@ fn restore_outputs(store: &Store, entry: &Entry) -> Result<()> {
 
 fn set_file_mtime(path: &Path, filetime: i64) {
     use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::Storage::FileSystem::{SetFileTime, FILE_FLAG_BACKUP_SEMANTICS};
-    use std::os::windows::io::AsRawHandle;
 
     let file = match std::fs::OpenOptions::new()
         .write(true)
@@ -371,7 +378,10 @@ pub fn explain(argv: &[String]) -> Result<ExitCode> {
     }
     let (_, entry) = &entries[0];
     match first_mismatch(entry, &statcache) {
-        None => println!("memo: would replay — all {} inputs match", entry.inputs.len()),
+        None => println!(
+            "memo: would replay — all {} inputs match",
+            entry.inputs.len()
+        ),
         Some(inp) => {
             println!("memo: would miss — first changed input:");
             println!("  {}", inp.path);

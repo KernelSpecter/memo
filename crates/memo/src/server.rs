@@ -8,7 +8,9 @@ use std::io::Write;
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING, PIPE_ACCESS_DUPLEX};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
@@ -48,7 +50,10 @@ impl PipeServer {
         // Validate we can create at least one instance up front.
         let probe = unsafe { create_instance(&name_w) };
         if probe == INVALID_HANDLE_VALUE || probe.is_null() {
-            return Err(anyhow!("CreateNamedPipe failed: {}", std::io::Error::last_os_error()));
+            return Err(anyhow!(
+                "CreateNamedPipe failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let shutdown = Arc::new(AtomicBool::new(false));

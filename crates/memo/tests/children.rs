@@ -15,7 +15,11 @@ fn child_reads_are_tracked() {
     let r1 = sb.run(&[&op]);
     assert_eq!(r1.exit, 0, "stderr: {}", r1.stderr);
     // Two processes executed: parent + child.
-    assert!(r1.executions >= 2, "expected parent+child to run, got {}", r1.executions);
+    assert!(
+        r1.executions >= 2,
+        "expected parent+child to run, got {}",
+        r1.executions
+    );
     assert!(r1.cached(), "stderr: {}", r1.stderr);
     assert!(r1.stdout.contains(&format!("READ {} 10", b)));
 
@@ -46,7 +50,11 @@ fn grandchild_reads_are_tracked() {
 
     let r1 = sb.run(&[&op]);
     assert_eq!(r1.exit, 0, "stderr: {}", r1.stderr);
-    assert!(r1.executions >= 3, "parent+child+grandchild, got {}", r1.executions);
+    assert!(
+        r1.executions >= 3,
+        "parent+child+grandchild, got {}",
+        r1.executions
+    );
     assert!(r1.cached(), "stderr: {}", r1.stderr);
 
     let r2 = sb.run(&[&op]);
@@ -55,5 +63,9 @@ fn grandchild_reads_are_tracked() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     sb.write("c.txt", b"deep-changed");
     let r3 = sb.run(&[&op]);
-    assert!(r3.executed, "changing a file read by a grandchild must miss; stderr: {}", r3.stderr);
+    assert!(
+        r3.executed,
+        "changing a file read by a grandchild must miss; stderr: {}",
+        r3.stderr
+    );
 }

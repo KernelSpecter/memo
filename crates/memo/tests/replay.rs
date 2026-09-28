@@ -20,7 +20,10 @@ fn stdout_stderr_and_exit_are_replayed() {
     assert!(!r2.executed);
     assert_eq!(r1.stdout, r2.stdout, "replayed stdout must match exactly");
     // r2.stderr also contains memo's status line; check the program output is present.
-    assert!(r2.stderr.contains("beta"), "replayed stderr must include program output");
+    assert!(
+        r2.stderr.contains("beta"),
+        "replayed stderr must include program output"
+    );
 }
 
 #[test]

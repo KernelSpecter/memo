@@ -106,11 +106,7 @@ impl Store {
     pub fn put_entry(&self, key: &str, entry: &Entry) -> io::Result<String> {
         let dir = self.key_dir(key);
         fs::create_dir_all(&dir)?;
-        let id = format!(
-            "{}-{}",
-            now_nanos(),
-            std::process::id()
-        );
+        let id = format!("{}-{}", now_nanos(), std::process::id());
         let dest = dir.join(format!("{}.entry", id));
         let tmp = dir.join(format!("{}.tmp", id));
         fs::write(&tmp, entry.encode())?;
@@ -265,10 +261,7 @@ impl Store {
                 }
             }
             for i in &e.inputs {
-                if let crate::fingerprint::InputFp::File {
-                    hash: Some(h), ..
-                } = &i.fp
-                {
+                if let crate::fingerprint::InputFp::File { hash: Some(h), .. } = &i.fp {
                     referenced.insert(crate::hash_hex(h));
                 }
             }

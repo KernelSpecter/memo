@@ -74,9 +74,7 @@ pub fn first_mismatch<'a>(e: &'a Entry, sc: &Mutex<StatCache>) -> Option<&'a Inp
 mod tests {
     use super::*;
     use crate::entry::Input;
-    use crate::fingerprint::{
-        build_input_fp, compute_listing_fp, DirEntry, PreState,
-    };
+    use crate::fingerprint::{build_input_fp, compute_listing_fp, DirEntry, PreState};
     use crate::statcache::StatCache;
     use std::collections::HashSet;
     use std::fs;
@@ -151,9 +149,7 @@ mod tests {
         let lfp = compute_listing_fp(&entries, &HashSet::new());
         let inp = Input {
             path: sub.to_string_lossy().into_owned(),
-            fp: InputFp::Dir {
-                listing: Some(lfp),
-            },
+            fp: InputFp::Dir { listing: Some(lfp) },
         };
         assert!(verify_input(&inp, &sc));
 

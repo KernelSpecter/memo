@@ -99,9 +99,9 @@ impl RunState {
 
     fn ignored(&self, path: &str) -> bool {
         let n = memo_core::paths::normalize(path).to_lowercase();
-        self.ignore_prefixes.iter().any(|pre| {
-            n == *pre || n.starts_with(&format!("{}\\", pre))
-        })
+        self.ignore_prefixes
+            .iter()
+            .any(|pre| n == *pre || n.starts_with(&format!("{}\\", pre)))
     }
 
     fn remember(&mut self, path: &str) -> PathId {
@@ -190,8 +190,10 @@ impl RunState {
             .copied()
             .collect();
         for pid in missing {
-            self.taints
-                .push((TaintReason::NoHello, format!("pid {} never checked in", pid)));
+            self.taints.push((
+                TaintReason::NoHello,
+                format!("pid {} never checked in", pid),
+            ));
         }
     }
 
@@ -260,9 +262,9 @@ impl RunState {
                     }
                     Some(sig) if sig.ftype == FType::Dir => {
                         let listing = if o.listed {
-                            read_dir_entries(Path::new(&path))
-                                .ok()
-                                .map(|entries| compute_listing_fp(&entries, &self.mutated_names_in(&path)))
+                            read_dir_entries(Path::new(&path)).ok().map(|entries| {
+                                compute_listing_fp(&entries, &self.mutated_names_in(&path))
+                            })
                         } else {
                             None
                         };
@@ -281,7 +283,9 @@ impl RunState {
                             ));
                         }
                         let hash = if o.read {
-                            std::fs::read(&path).ok().map(|b| *blake3::hash(&b).as_bytes())
+                            std::fs::read(&path)
+                                .ok()
+                                .map(|b| *blake3::hash(&b).as_bytes())
                         } else {
                             None
                         };
@@ -396,12 +400,9 @@ fn needs_output(pre: Option<&PreSnap>, obs: Option<&Obs>, final_state: &FileStat
         (Some(PreSnap::Absent) | None, FileState::Absent) => false,
         (Some(PreSnap::Dir), FileState::Dir) => false,
         // Content is pinned only if the path was read (hash iff read).
-        (
-            Some(PreSnap::File {
-                hash: Some(h), ..
-            }),
-            FileState::File { content, .. },
-        ) => !o.read || h != content,
+        (Some(PreSnap::File { hash: Some(h), .. }), FileState::File { content, .. }) => {
+            !o.read || h != content
+        }
         // Type changed, or pre content unknown: record it (safe).
         _ => true,
     }
@@ -421,7 +422,7 @@ pub fn now_filetime() -> i64 {
     let unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let ticks = (unix.as_secs() as i64 + 11_644_473_600) * 10_000_000
-        + (unix.subsec_nanos() as i64) / 100;
+    let ticks =
+        (unix.as_secs() as i64 + 11_644_473_600) * 10_000_000 + (unix.subsec_nanos() as i64) / 100;
     ticks
 }

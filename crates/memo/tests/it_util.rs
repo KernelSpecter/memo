@@ -27,7 +27,10 @@ pub fn ensure_built() {
             .args(["build", "-p", "memo", "-p", "memo-hook", "-p", "memo-probe"])
             .status()
             .expect("cargo build for integration prerequisites");
-        assert!(status.success(), "failed to build integration prerequisites");
+        assert!(
+            status.success(),
+            "failed to build integration prerequisites"
+        );
     });
 }
 
@@ -60,9 +63,14 @@ impl Sandbox {
         std::fs::create_dir_all(&cache).unwrap();
         // Marker lives in the OS temp dir, which memo ignores, so probe
         // executions are counted without being tracked as inputs/outputs.
-        let marker = std::env::temp_dir().join(format!("memo-marker-{}-{}", name, std::process::id()));
+        let marker =
+            std::env::temp_dir().join(format!("memo-marker-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_file(&marker);
-        Sandbox { work, cache, marker }
+        Sandbox {
+            work,
+            cache,
+            marker,
+        }
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {
@@ -79,7 +87,9 @@ impl Sandbox {
 
     /// Number of times the probe actually executed across all runs so far.
     pub fn marker_count(&self) -> u64 {
-        std::fs::metadata(&self.marker).map(|m| m.len()).unwrap_or(0)
+        std::fs::metadata(&self.marker)
+            .map(|m| m.len())
+            .unwrap_or(0)
     }
 
     /// Run memo with the given probe ops. Returns the run outcome.

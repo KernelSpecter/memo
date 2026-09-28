@@ -12,7 +12,10 @@ fn output_is_restored_on_replay() {
     let r1 = sb.run(&[&op]);
     assert!(r1.executed);
     assert!(r1.cached(), "stderr: {}", r1.stderr);
-    assert_eq!(std::fs::read(sb.path("out.txt")).unwrap(), b"generated-content");
+    assert_eq!(
+        std::fs::read(sb.path("out.txt")).unwrap(),
+        b"generated-content"
+    );
 
     // Delete the output; replay must recreate it byte-for-byte without running.
     std::fs::remove_file(sb.path("out.txt")).unwrap();
@@ -64,5 +67,8 @@ fn delete_output_restored() {
     sb.write("victim.txt", b"bye");
     let r2 = sb.run(&[&op]);
     assert!(r2.replayed() || r2.cached(), "stderr: {}", r2.stderr);
-    assert!(!sb.path("victim.txt").exists(), "replay must re-delete the file");
+    assert!(
+        !sb.path("victim.txt").exists(),
+        "replay must re-delete the file"
+    );
 }
