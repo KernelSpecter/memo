@@ -161,6 +161,9 @@ the key.
 - No pseudo-console capture yet: the command's stdout and stderr are pipes, and
   its stdin is `NUL`, so interactive commands won't work under memo.
 - The cache is local; there's no remote or shared cache.
+- For a `.cmd`/`.bat` command, memo quotes each argument so cmd metacharacters
+  (`& | < > ( ) ^`) are passed through literally, but an argument containing
+  `%VAR%` is still expanded by cmd (a Windows command-line limitation).
 
 ## Measured
 

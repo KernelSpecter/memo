@@ -53,6 +53,32 @@ fn join_cmdline(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// Quote an argument that will be parsed by cmd.exe (a `.cmd`/`.bat` shim).
+/// cmd treats `& | < > ( ) ^` as metacharacters, so an unquoted argument like
+/// `a&whoami` would run `whoami`. Inside cmd double-quotes those characters are
+/// all literal, so every argument is wrapped in quotes (even ones without
+/// spaces, which `quote_arg` would leave bare) and embedded quotes are escaped.
+/// Caveat: `%VAR%` still expands and `!` is special under delayed expansion —
+/// these cannot be neutralized on a cmd command line (documented in the README).
+fn cmd_quote_arg(arg: &str) -> String {
+    let mut out = String::from("\"");
+    for c in arg.chars() {
+        if c == '"' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
+}
+
+fn join_cmd_cmdline(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| cmd_quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn pathext() -> Vec<String> {
     std::env::var("PATHEXT")
         .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
@@ -120,7 +146,7 @@ pub fn resolve(argv: &[String]) -> anyhow::Result<ResolvedCommand> {
         // Rebuild argv with the resolved script path in slot 0.
         let mut full = argv.to_vec();
         full[0] = resolved.to_string_lossy().into_owned();
-        let inner = join_cmdline(&full);
+        let inner = join_cmd_cmdline(&full);
         // cmd /d /s /c "<inner>" — the surrounding quotes let cmd treat the
         // whole thing as one command (cmd's quote-stripping rules).
         let cmdline = format!("{} /d /s /c \"{}\"", quote_arg(&comspec), inner);
@@ -170,6 +196,32 @@ mod tests {
     #[test]
     fn unknown_command_errors() {
         assert!(resolve(&["definitely-not-a-real-prog-xyz".into()]).is_err());
+    }
+
+    #[test]
+    fn cmd_metacharacters_are_neutralized() {
+        // A metacharacter argument must end up inside cmd quotes, where it is
+        // literal — not bare, where cmd would act on it.
+        assert_eq!(cmd_quote_arg("a&whoami"), "\"a&whoami\"");
+        assert_eq!(cmd_quote_arg("x>out.txt"), "\"x>out.txt\"");
+        assert_eq!(cmd_quote_arg("a|b"), "\"a|b\"");
+        // Embedded quotes are escaped.
+        assert_eq!(cmd_quote_arg("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn bat_args_are_cmd_quoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("run.bat");
+        std::fs::write(&bat, b"@echo off\r\n").unwrap();
+        let r = resolve(&[bat.to_string_lossy().into_owned(), "a&whoami".into()]).unwrap();
+        // The dangerous argument is inside quotes, so cmd won't run whoami.
+        assert!(r.cmdline.contains("\"a&whoami\""), "cmdline: {}", r.cmdline);
+        assert!(
+            !r.cmdline.contains(" a&whoami"),
+            "arg must not be bare: {}",
+            r.cmdline
+        );
     }
 
     #[test]
