@@ -71,6 +71,12 @@ fn main() {
                 let _ = std::fs::remove_file(rest);
                 println!("DELETED {}", rest);
             }
+            "mkdirstrict" => {
+                // Non-recursive: on an existing dir this issues a FILE_CREATE
+                // that fails (the failed-mutation case).
+                let ok = std::fs::create_dir(rest).is_ok();
+                println!("MKDIRSTRICT {} {}", rest, ok);
+            }
             "mkdir" => {
                 let _ = std::fs::create_dir_all(rest);
                 println!("MKDIR {}", rest);

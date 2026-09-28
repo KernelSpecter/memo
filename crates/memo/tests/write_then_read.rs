@@ -62,6 +62,37 @@ fn identical_rewrite_of_unread_output_is_still_restored() {
 }
 
 #[test]
+fn append_only_pins_pre_run_content() {
+    // A pure append (no read op) whose output is the file itself: the appended
+    // result depends on the pre-run prefix, so the pre-run content must be
+    // pinned even though nothing "read" the file with a read handle.
+    let sb = Sandbox::new("append_only_pin");
+    let log = abs(&sb.path("log.txt"));
+    let op = format!("append={}|B", log);
+
+    sb.write("log.txt", b"AAAA");
+    let r1 = sb.run(&[&op]);
+    assert!(r1.cached(), "stderr: {}", r1.stderr);
+    assert_eq!(std::fs::read(sb.path("log.txt")).unwrap(), b"AAAAB");
+
+    // Same pre-run content -> replay restores the same appended result.
+    sb.write("log.txt", b"AAAA");
+    let r2 = sb.run(&[&op]);
+    assert!(r2.replayed(), "stderr: {}", r2.stderr);
+    assert_eq!(std::fs::read(sb.path("log.txt")).unwrap(), b"AAAAB");
+
+    // Same size, different content: replaying AAAAB would be stale.
+    sb.write("log.txt", b"ZZZZ");
+    let r3 = sb.run(&[&op]);
+    assert!(
+        r3.executed,
+        "append must not replay after pre-run content changed; stderr: {}",
+        r3.stderr
+    );
+    assert_eq!(std::fs::read(sb.path("log.txt")).unwrap(), b"ZZZZB");
+}
+
+#[test]
 fn append_then_read_misses_when_pre_run_content_changes() {
     let sb = Sandbox::new("wtr_append");
     let log = abs(&sb.path("log.txt"));

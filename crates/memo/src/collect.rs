@@ -147,7 +147,11 @@ impl RunState {
             return;
         }
         let id = self.remember(path);
-        self.mutated.insert(id.clone());
+        // Do NOT mark the path mutated here: a PreMutate only means a mutation
+        // was *attempted*. The path is marked mutated by on_mutate, which the
+        // hook sends only after the operation succeeds — so an open that fails
+        // (e.g. CreateDirectory on an existing dir, a denied write) leaves a
+        // snapshot but is never treated as an output or input.
         if self.premutated.contains_key(&id) {
             return;
         }

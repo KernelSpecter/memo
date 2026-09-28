@@ -80,13 +80,20 @@ fn post_open(path: Option<String>, is_mut: bool, by_id: bool, desired: u32, stat
     }
     if is_mut {
         // Only an open that succeeded (NT_SUCCESS) can have changed anything.
-        // The PreMutate snapshot already marked the path as possibly mutated.
         if status >= 0 {
-            let kind = if desired & DELETE != 0 {
+            let is_delete = desired & DELETE != 0;
+            let kind = if is_delete {
                 MutateKind::Delete
             } else {
                 MutateKind::Write
             };
+            // A write whose result can depend on the pre-run content — a
+            // read-write handle, or an append (which preserves the prefix) —
+            // is also reported as a Read so finalize pins the pre-run content.
+            // A truncating write or a delete does not read prior content.
+            if !is_delete && desired & (READ_ACCESS_MASK | FILE_APPEND_DATA) != 0 {
+                client::access(AccessKind::Read, path.clone());
+            }
             client::mutate(kind, path, None);
         }
         return;
