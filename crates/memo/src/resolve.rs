@@ -30,18 +30,18 @@ pub fn quote_arg(arg: &str) -> String {
                 backslashes += 1;
             }
             '"' => {
-                out.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
                 backslashes = 0;
                 out.push('"');
             }
             _ => {
-                out.extend(std::iter::repeat('\\').take(backslashes));
+                out.extend(std::iter::repeat_n('\\', backslashes));
                 backslashes = 0;
                 out.push(c);
             }
         }
     }
-    out.extend(std::iter::repeat('\\').take(backslashes * 2));
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
     out.push('"');
     out
 }

@@ -20,11 +20,11 @@ pub fn normalize(path: &str) -> String {
     let bytes = unified.as_bytes();
 
     // Detect UNC / verbatim prefix.
-    let (prefix, rest) = if unified.starts_with("\\\\") {
+    let (prefix, rest) = if let Some(rest) = unified.strip_prefix("\\\\") {
         // Keep the whole `\\server\share` or `\\?\...` head intact up to the
         // component after share; simplest correct handling: treat everything
         // as segments but keep the leading `\\`.
-        ("\\\\", &unified[2..])
+        ("\\\\", rest)
     } else if bytes.len() >= 2 && bytes[1] == b':' {
         // Drive-letter path like `C:\...` or `C:relative`.
         (&unified[..2], &unified[2..])

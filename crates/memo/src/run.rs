@@ -111,7 +111,7 @@ pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
     }
 
     // Miss: launch traced.
-    let code = launch_and_store(&store, &statcache, &prep, flags)?;
+    let code = launch_and_store(&store, &prep, flags)?;
     save_statcache(&statcache);
     Ok(code)
 }
@@ -129,12 +129,7 @@ fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
     Ok(ExitCode::from(clamp_code(entry.exit_code)))
 }
 
-fn launch_and_store(
-    store: &Store,
-    statcache: &Mutex<StatCache>,
-    prep: &Prepared,
-    flags: &Flags,
-) -> Result<ExitCode> {
+fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<ExitCode> {
     let dll = dll_path()?;
     let dll_ansi: Vec<u8> = dll
         .to_string_lossy()

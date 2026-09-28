@@ -25,7 +25,6 @@ static mut REAL_NTSETINFORMATIONFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTDEVICEIOCONTROLFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTFSCONTROLFILE: *mut c_void = std::ptr::null_mut();
 static mut REAL_NTQUERYDIRECTORYFILEEX: *mut c_void = std::ptr::null_mut();
-static mut REAL_NTCREATEPROCESS_PLACEHOLDER: *mut c_void = std::ptr::null_mut();
 
 fn is_not_found(status: NTSTATUS) -> bool {
     status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_OBJECT_PATH_NOT_FOUND
@@ -260,10 +259,7 @@ unsafe fn set_info_pre(
                         .map(|base| format!("{}\\{}", base.trim_end_matches('\\'), raw))
                 } else {
                     // Absolute NT path; normalize via classifier.
-                    match classify_target(&raw) {
-                        Some(p) => Some(p),
-                        None => None,
-                    }
+                    classify_target(&raw)
                 }
             } else {
                 None
@@ -516,7 +512,6 @@ unsafe fn install_inner() {
         client::taint(TaintReason::HookInstallFailed, "no ntdll");
         return;
     }
-    let ntdll = ntdll as *mut c_void;
 
     REAL_NTCREATEFILE = proc_addr(ntdll, "NtCreateFile");
     REAL_NTOPENFILE = proc_addr(ntdll, "NtOpenFile");
@@ -526,7 +521,6 @@ unsafe fn install_inner() {
     REAL_NTDEVICEIOCONTROLFILE = proc_addr(ntdll, "NtDeviceIoControlFile");
     REAL_NTFSCONTROLFILE = proc_addr(ntdll, "NtFsControlFile");
     REAL_NTQUERYDIRECTORYFILEEX = proc_addr(ntdll, "NtQueryDirectoryFileEx");
-    let _ = &REAL_NTCREATEPROCESS_PLACEHOLDER;
 
     if DetourTransactionBegin() != 0 {
         client::taint(TaintReason::HookInstallFailed, "txn begin");
@@ -535,33 +529,36 @@ unsafe fn install_inner() {
     DetourUpdateThread(windows_sys::Win32::System::Threading::GetCurrentThread());
 
     attach(
-        &mut REAL_NTCREATEFILE,
-        h_ntcreatefile as usize as *mut c_void,
-    );
-    attach(&mut REAL_NTOPENFILE, h_ntopenfile as usize as *mut c_void);
-    attach(
-        &mut REAL_NTQUERYATTRIBUTESFILE,
-        h_ntqueryattributesfile as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTCREATEFILE),
+        h_ntcreatefile as *const () as *mut c_void,
     );
     attach(
-        &mut REAL_NTQUERYFULLATTRIBUTESFILE,
-        h_ntqueryfullattributesfile as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTOPENFILE),
+        h_ntopenfile as *const () as *mut c_void,
     );
     attach(
-        &mut REAL_NTSETINFORMATIONFILE,
-        h_ntsetinformationfile as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTQUERYATTRIBUTESFILE),
+        h_ntqueryattributesfile as *const () as *mut c_void,
     );
     attach(
-        &mut REAL_NTDEVICEIOCONTROLFILE,
-        h_ntdeviceiocontrolfile as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTQUERYFULLATTRIBUTESFILE),
+        h_ntqueryfullattributesfile as *const () as *mut c_void,
     );
     attach(
-        &mut REAL_NTFSCONTROLFILE,
-        h_ntfscontrolfile as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTSETINFORMATIONFILE),
+        h_ntsetinformationfile as *const () as *mut c_void,
     );
     attach(
-        &mut REAL_NTQUERYDIRECTORYFILEEX,
-        h_ntquerydirectoryfileex as usize as *mut c_void,
+        std::ptr::addr_of_mut!(REAL_NTDEVICEIOCONTROLFILE),
+        h_ntdeviceiocontrolfile as *const () as *mut c_void,
+    );
+    attach(
+        std::ptr::addr_of_mut!(REAL_NTFSCONTROLFILE),
+        h_ntfscontrolfile as *const () as *mut c_void,
+    );
+    attach(
+        std::ptr::addr_of_mut!(REAL_NTQUERYDIRECTORYFILEEX),
+        h_ntquerydirectoryfileex as *const () as *mut c_void,
     );
 
     // Child-process propagation hooks (Task 10).
@@ -572,9 +569,11 @@ unsafe fn install_inner() {
     }
 }
 
-unsafe fn attach(real: &mut *mut c_void, detour: *mut c_void) {
-    if real.is_null() {
+/// `real` points at the static holding the original function; Detours
+/// rewrites it to the trampoline. Skipped if the export wasn't found.
+unsafe fn attach(real: *mut *mut c_void, detour: *mut c_void) {
+    if (*real).is_null() {
         return;
     }
-    memo_detours::DetourAttach(real as *mut *mut c_void, detour);
+    memo_detours::DetourAttach(real, detour);
 }

@@ -111,10 +111,6 @@ impl PipeServer {
         })
     }
 
-    pub fn pipe_name(&self) -> &str {
-        &self.name
-    }
-
     /// Stop accepting and join all handlers. Unblocks the listener's pending
     /// ConnectNamedPipe by opening a throwaway client connection.
     pub fn shutdown(mut self) {

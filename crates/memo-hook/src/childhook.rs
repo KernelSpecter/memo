@@ -254,7 +254,6 @@ pub unsafe fn attach_child_hooks() {
     if k32.is_null() {
         return;
     }
-    let k32 = k32 as *mut c_void;
 
     REAL_CREATEPROCESSW = proc_addr(k32, "CreateProcessW");
     REAL_CREATEPROCESSA = proc_addr(k32, "CreateProcessA");
@@ -263,19 +262,19 @@ pub unsafe fn attach_child_hooks() {
     if !REAL_CREATEPROCESSW.is_null() {
         memo_detours::DetourAttach(
             std::ptr::addr_of_mut!(REAL_CREATEPROCESSW),
-            h_createprocessw as usize as *mut c_void,
+            h_createprocessw as *const () as *mut c_void,
         );
     }
     if !REAL_CREATEPROCESSA.is_null() {
         memo_detours::DetourAttach(
             std::ptr::addr_of_mut!(REAL_CREATEPROCESSA),
-            h_createprocessa as usize as *mut c_void,
+            h_createprocessa as *const () as *mut c_void,
         );
     }
     if !REAL_CREATEPROCESSASUSERW.is_null() {
         memo_detours::DetourAttach(
             std::ptr::addr_of_mut!(REAL_CREATEPROCESSASUSERW),
-            h_createprocessasuserw as usize as *mut c_void,
+            h_createprocessasuserw as *const () as *mut c_void,
         );
     }
 }

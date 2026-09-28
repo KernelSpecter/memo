@@ -98,7 +98,7 @@ impl Store {
                 }
             }
         }
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|r| std::cmp::Reverse(r.1));
         rows.into_iter().map(|(id, _, e)| (id, e)).collect()
     }
 
@@ -230,7 +230,7 @@ impl Store {
         }
 
         // Oldest first.
-        all.sort_by(|a, b| a.1.cmp(&b.1));
+        all.sort_by_key(|x| x.1);
 
         let mut removed_entries = 0u64;
         let mut current = before;
@@ -277,10 +277,8 @@ impl Store {
                 if let Ok(files) = fs::read_dir(shard.path()) {
                     for f in files.flatten() {
                         let name = f.file_name().to_string_lossy().into_owned();
-                        if !referenced.contains(&name) {
-                            if fs::remove_file(f.path()).is_ok() {
-                                removed_blobs += 1;
-                            }
+                        if !referenced.contains(&name) && fs::remove_file(f.path()).is_ok() {
+                            removed_blobs += 1;
                         }
                     }
                 }

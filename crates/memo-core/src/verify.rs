@@ -74,7 +74,7 @@ pub fn first_mismatch<'a>(e: &'a Entry, sc: &Mutex<StatCache>) -> Option<&'a Inp
 mod tests {
     use super::*;
     use crate::entry::Input;
-    use crate::fingerprint::{build_input_fp, compute_listing_fp, DirEntry, PreState};
+    use crate::fingerprint::{build_input_fp, compute_listing_fp, PreState};
     use crate::statcache::StatCache;
     use std::collections::HashSet;
     use std::fs;

@@ -198,6 +198,7 @@ impl RunState {
     }
 
     /// Finalize into an Entry or a taint list.
+    #[allow(clippy::too_many_arguments)]
     pub fn finalize(
         &mut self,
         argv: Vec<String>,
@@ -362,10 +363,6 @@ impl RunState {
         }
         names
     }
-
-    pub fn taints(&self) -> &[(TaintReason, String)] {
-        &self.taints
-    }
 }
 
 fn current_state(path: &Path, cas: &Cas) -> FileState {
@@ -422,7 +419,5 @@ pub fn now_filetime() -> i64 {
     let unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    let ticks =
-        (unix.as_secs() as i64 + 11_644_473_600) * 10_000_000 + (unix.subsec_nanos() as i64) / 100;
-    ticks
+    (unix.as_secs() as i64 + 11_644_473_600) * 10_000_000 + (unix.subsec_nanos() as i64) / 100
 }

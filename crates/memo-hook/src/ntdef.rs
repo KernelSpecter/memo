@@ -1,7 +1,12 @@
 //! NT-native structures and function-pointer types not exposed (or not exposed
 //! conveniently) by windows-sys. Only what the hooks need.
 
-#![allow(non_snake_case, non_camel_case_types, dead_code)]
+#![allow(
+    non_snake_case,
+    non_camel_case_types,
+    dead_code,
+    clippy::upper_case_acronyms
+)]
 
 use core::ffi::c_void;
 use windows_sys::Win32::Foundation::HANDLE;
