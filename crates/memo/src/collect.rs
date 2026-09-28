@@ -244,7 +244,24 @@ impl RunState {
                 // Pre-run state from the snapshot.
                 let snap = self.premutated.get(id);
                 let pre = match snap {
-                    Some(PreSnap::Absent) | None => PreState::Absent,
+                    Some(PreSnap::Absent) => PreState::Absent,
+                    None => {
+                        // A path is marked mutated but has no pre-run snapshot.
+                        // In normal operation every mutate is preceded by a
+                        // PreMutate that records a snapshot; a missing snapshot
+                        // means the PreMutate was skipped (premutate_wait
+                        // short-circuits during process teardown) or the client
+                        // was unavailable. We cannot prove the pre-run state, so
+                        // recording it as Absent could later match a genuinely
+                        // absent path and replay a result computed from real
+                        // prior content. Taint instead — never cache a run whose
+                        // input we could not observe.
+                        self.taints.push((
+                            TaintReason::InternalError,
+                            format!("no pre-run snapshot for mutated path {}", path),
+                        ));
+                        PreState::Absent
+                    }
                     Some(PreSnap::Dir) => PreState::Dir { listing: None },
                     Some(PreSnap::File { size, mtime, hash }) => {
                         if o.read && hash.is_none() {
@@ -440,4 +457,66 @@ pub fn now_filetime() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     (unix.as_secs() as i64 + 11_644_473_600) * 10_000_000 + (unix.subsec_nanos() as i64) / 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dir outside every ignored prefix (%TEMP% etc.), under the build target.
+    fn ut_dir(name: &str) -> std::path::PathBuf {
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("memo-ut")
+            .join(format!("{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    /// A path marked mutated with no pre-run snapshot (the PreMutate was skipped,
+    /// as premutate_wait does during process teardown) must taint the run, not be
+    /// silently recorded as pre-run Absent — else a real prior file would later
+    /// match that Absent fingerprint and replay stale.
+    #[test]
+    fn mutated_path_without_snapshot_taints() {
+        let dir = ut_dir("mut_no_snap");
+        let file = dir.join("real.txt");
+        std::fs::write(&file, b"prior content").unwrap();
+        let fs_path = file.to_string_lossy().into_owned();
+
+        let mut rs = RunState::new(&dir.join("cache"), now_filetime(), false);
+        // Observed (read) and mutated, but on_premutate was never called: exactly
+        // the state the teardown short-circuit leaves behind.
+        rs.on_access(AccessKind::Read, &fs_path);
+        rs.on_mutate(MutateKind::Write, &fs_path, None);
+        assert!(
+            !rs.ignored(&fs_path),
+            "test path must not be under an ignored prefix"
+        );
+
+        let cas = Cas::new(dir.join("cas"));
+        match rs.finalize(
+            vec!["cmd".into()],
+            "cwd".into(),
+            0,
+            0,
+            [0u8; 32],
+            &cas,
+            false,
+        ) {
+            Finalized::Tainted(reasons) => assert!(
+                reasons
+                    .iter()
+                    .any(|(r, _)| *r == TaintReason::InternalError),
+                "expected an InternalError taint, got {:?}",
+                reasons
+            ),
+            Finalized::Cacheable(_) => {
+                panic!("a mutated path with no pre-run snapshot must taint, not cache");
+            }
+        }
+    }
 }

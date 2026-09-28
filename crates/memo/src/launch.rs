@@ -203,46 +203,21 @@ unsafe fn launch_inner(
 
     ResumeThread(pi.hThread);
 
-    // Wait for the root process to exit, but never forever: poll in bounded
-    // slices instead of an INFINITE wait, so a bug anywhere in the injected
-    // hook (or a runaway target) can never hang memo itself. WaitForSingleObject
-    // still returns the instant the handle signals (a normal exit is not
-    // delayed by the slice length), so this is identical in effect to the old
-    // INFINITE wait for every real-world run; only a root that outlives
-    // ROOT_WAIT_CAP is force-killed and reported as outlived, the same
-    // treatment as a descendant that outlives the post-exit grace period
-    // below.
+    // Wait for the root process to exit. Poll in bounded slices rather than a
+    // single INFINITE wait so the loop stays responsive, but there is no cap: a
+    // command may legitimately run for hours, and the exit-hang this once
+    // guarded against is now fixed at its source (the injected hook never blocks
+    // on a lock during process teardown — see memo-hook's client/DllMain).
+    // WaitForSingleObject returns the instant the handle signals, so a normal
+    // exit is not delayed by the slice length.
     const ROOT_WAIT_SLICE_MS: u32 = 1_000;
-    const ROOT_WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-    let root_deadline = std::time::Instant::now() + ROOT_WAIT_CAP;
-    let mut root_outlived = false;
     loop {
         match WaitForSingleObject(pi.hProcess, ROOT_WAIT_SLICE_MS) {
             WAIT_OBJECT_0 => break,
-            WAIT_TIMEOUT => {
-                if std::time::Instant::now() >= root_deadline {
-                    root_outlived = true;
-                    break;
-                }
-            }
+            WAIT_TIMEOUT => continue,
             // WAIT_FAILED or anything unexpected: stop waiting rather than
             // spin forever on a handle that will never signal.
             _ => break,
-        }
-    }
-    if root_outlived {
-        // A runaway root: force the whole tree down, then give it a bounded
-        // window to actually reach the signaled state. TerminateJobObject
-        // only requests termination — it doesn't wait — so GetExitCodeProcess
-        // right after it could still observe STILL_ACTIVE.
-        TerminateJobObject(job, 1);
-        let term_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            match WaitForSingleObject(pi.hProcess, ROOT_WAIT_SLICE_MS) {
-                WAIT_OBJECT_0 => break,
-                WAIT_TIMEOUT if std::time::Instant::now() < term_deadline => continue,
-                _ => break,
-            }
         }
     }
     let mut code: u32 = 0;
@@ -279,12 +254,11 @@ unsafe fn launch_inner(
         }
     }
 
-    let outlived = root_outlived || !zero;
+    // A process outlived the command (the tree didn't drain to zero within the
+    // grace period). Task 9 changes what happens here (taint, don't kill); for
+    // now the tree is still terminated so memo doesn't leave it running.
+    let outlived = !zero;
     if outlived {
-        // A process is still alive after the grace period (or the root itself
-        // was a runaway, above): kill the tree so we don't hang, and let the
-        // caller taint the run. Harmless to call again if root_outlived
-        // already terminated the job.
         TerminateJobObject(job, 1);
     }
 

@@ -98,6 +98,10 @@ fn on_attach(hinst: HMODULE) {
     let _ = PAYLOAD.set(rp);
     let image = current_image_path();
 
+    // Resolve the teardown check now, while all threads are alive (see
+    // client::prime_shutdown_check).
+    client::prime_shutdown_check();
+
     if client::init(&pipe_name, &image) {
         hooks::install();
     }

@@ -105,6 +105,16 @@ fn lock(m: &Mutex<Client>) -> Option<std::sync::MutexGuard<'_, Client>> {
     }
 }
 
+/// Resolve the shutdown-check address eagerly, at DLL attach while every thread
+/// is still alive. Otherwise the first call to `shutting_down()` could be the
+/// one that runs during teardown: if that thread is terminated inside
+/// `OnceLock::get_or_init`, the cell is stuck "initializing" and every later
+/// caller blocks forever — reintroducing a teardown hang in the exact path this
+/// gate exists to keep hang-free.
+pub fn prime_shutdown_check() {
+    let _ = shutting_down();
+}
+
 /// Connect to memo's pipe and send the initial Hello. Returns false on failure
 /// (the caller then leaves the process untraced; memo will taint via NoHello).
 pub fn init(pipe_name: &str, image: &str) -> bool {
