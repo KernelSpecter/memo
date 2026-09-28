@@ -73,6 +73,21 @@ impl Store {
     pub fn read(&self, h: &Hash) -> io::Result<Vec<u8>> {
         fs::read(self.path_for(h))
     }
+
+    /// Read a blob and verify its content still hashes to `h`. A mismatch (bit
+    /// rot, truncation, tampering) or a missing blob is an error, so a caller
+    /// restoring outputs can fall back to running the command instead of writing
+    /// corrupt bytes.
+    pub fn read_verified(&self, h: &Hash) -> io::Result<Vec<u8>> {
+        let bytes = fs::read(self.path_for(h))?;
+        if blake3::hash(&bytes).as_bytes() != h {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cached blob content does not match its hash",
+            ));
+        }
+        Ok(bytes)
+    }
 }
 
 /// Write to a sibling temp file then rename over the destination.

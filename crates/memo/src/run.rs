@@ -101,16 +101,30 @@ pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
     if !flags.no_read {
         for (id, entry) in store.load_entries(&prep.key) {
             if verify_entry(&entry, &statcache) {
-                let r = replay(&store, &entry, flags);
-                store.touch(&prep.key, &id);
-                store.record_hit(entry.duration_ms);
-                save_statcache(&statcache);
-                return r;
+                match replay(&store, &entry, flags) {
+                    Ok(code) => {
+                        store.touch(&prep.key, &id);
+                        store.record_hit(entry.duration_ms);
+                        save_statcache(&statcache);
+                        return Ok(code);
+                    }
+                    Err(e) => {
+                        // The inputs matched but restoring the recorded result
+                        // failed — a locked output, or a corrupt/missing blob.
+                        // Don't fail the command and don't leave a half-restored
+                        // tree: fall back to running it for real (spec §10). The
+                        // real run re-stores a fresh, valid entry.
+                        if flags.verbose {
+                            eprintln!("memo: replay failed ({}); running the command", e);
+                        }
+                        break;
+                    }
+                }
             }
         }
     }
 
-    // Miss: launch traced.
+    // Miss (or replay fell back): launch traced.
     let code = launch_and_store(&store, &prep, flags)?;
     save_statcache(&statcache);
     Ok(code)
@@ -118,7 +132,7 @@ pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
 
 fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
     restore_outputs(store, entry)?;
-    replay_console(&decode_console(store, entry));
+    replay_console(&decode_console(store, entry)?);
     status_line(
         flags,
         &format!(
@@ -289,14 +303,21 @@ fn restore_outputs(store: &Store, entry: &Entry) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             let bytes = cas
-                .read(content)
-                .map_err(|e| anyhow!("missing cached output blob for {}: {}", o.path, e))?;
+                .read_verified(content)
+                .map_err(|e| anyhow!("cached output blob for {} unusable: {}", o.path, e))?;
             let tmp = dest.with_extension(format!("memo-tmp-{}", std::process::id()));
             std::fs::write(&tmp, &bytes)?;
-            let _ = std::fs::rename(&tmp, dest).or_else(|_| {
-                let _ = std::fs::remove_file(dest);
-                std::fs::rename(&tmp, dest)
-            });
+            // Propagate a failed restore (e.g. the destination is locked) rather
+            // than swallowing it and leaving stale content; clean up the temp.
+            std::fs::rename(&tmp, dest)
+                .or_else(|_| {
+                    let _ = std::fs::remove_file(dest);
+                    std::fs::rename(&tmp, dest)
+                })
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    anyhow!("could not restore output {}: {}", o.path, e)
+                })?;
             set_file_mtime(dest, *mtime);
             if *readonly {
                 if let Ok(md) = std::fs::metadata(dest) {
@@ -334,13 +355,12 @@ fn set_file_mtime(path: &Path, filetime: i64) {
     }
 }
 
-fn decode_console(store: &Store, entry: &Entry) -> ConsoleLog {
-    store
+fn decode_console(store: &Store, entry: &Entry) -> Result<ConsoleLog> {
+    let bytes = store
         .cas()
-        .read(&entry.console)
-        .ok()
-        .and_then(|b| postcard::from_bytes(&b).ok())
-        .unwrap_or_default()
+        .read_verified(&entry.console)
+        .map_err(|e| anyhow!("cached console blob unusable: {}", e))?;
+    postcard::from_bytes(&bytes).map_err(|e| anyhow!("could not decode cached console: {}", e))
 }
 
 fn save_statcache(statcache: &Mutex<StatCache>) {
