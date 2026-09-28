@@ -30,15 +30,20 @@ mod imp {
     use windows_sys::Win32::Storage::FileSystem::{
         FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
         BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_BASIC_INFO,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
     };
 
     pub fn signature(path: &Path) -> Option<FileSig> {
         // Open via std so we don't juggle CreateFileW directly.
         // FILE_FLAG_BACKUP_SEMANTICS lets us open directories too; full share
         // mode so we never block the traced process.
+        // Request only FILE_READ_ATTRIBUTES, not read access: we just need the
+        // file's metadata, and this succeeds even when another process holds the
+        // content open exclusively — so a locked-but-present file is not mistaken
+        // for absent.
         let file = std::fs::OpenOptions::new()
-            .read(true)
+            .access_mode(FILE_READ_ATTRIBUTES)
             .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)

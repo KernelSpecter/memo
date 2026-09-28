@@ -279,6 +279,21 @@ unsafe fn set_info_pre(
     length: u32,
     class: i32,
 ) -> Option<(MutateKind, String, Option<String>)> {
+    // Check the information class BEFORE resolving the handle to a path: only
+    // these classes mutate, and GetFinalPathNameByHandleW is expensive. Skipping
+    // it for the others (notably FilePositionInformation, issued by every seek)
+    // keeps seek-heavy workloads fast.
+    if !matches!(
+        class,
+        FILE_DISPOSITION_INFORMATION
+            | FILE_DISPOSITION_INFORMATION_EX
+            | FILE_RENAME_INFORMATION
+            | FILE_LINK_INFORMATION
+            | FILE_BASIC_INFORMATION
+            | FILE_END_OF_FILE_INFORMATION
+    ) {
+        return None;
+    }
     let path = handle_to_win32(file_handle)?;
     match class {
         FILE_DISPOSITION_INFORMATION | FILE_DISPOSITION_INFORMATION_EX => {

@@ -56,7 +56,9 @@ fn main() -> ExitCode {
             Err(e) => fail(e),
         },
         cli::Command::Run { argv, flags } => match run::execute(&argv, &flags) {
-            Ok(code) => code,
+            // Exit with the command's real code, preserving values above 255
+            // (ExitCode is limited to a u8); memo's own failures use fail() -> 125.
+            Ok(code) => std::process::exit(code),
             Err(e) => fail(e),
         },
     }

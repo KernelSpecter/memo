@@ -92,7 +92,7 @@ fn prepare(argv: &[String], flags: &Flags, statcache: &Mutex<StatCache>) -> Resu
     })
 }
 
-pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
+pub fn execute(argv: &[String], flags: &Flags) -> Result<i32> {
     if argv.is_empty() {
         return Err(anyhow!("no command given"));
     }
@@ -142,7 +142,7 @@ pub fn execute(argv: &[String], flags: &Flags) -> Result<ExitCode> {
     Ok(code)
 }
 
-fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
+fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<i32> {
     restore_outputs(store, entry)?;
     replay_console(&decode_console(store, entry)?);
     status_line(
@@ -152,10 +152,10 @@ fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
             entry.duration_ms as f64 / 1000.0
         ),
     );
-    Ok(ExitCode::from(clamp_code(entry.exit_code)))
+    Ok(entry.exit_code)
 }
 
-fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<ExitCode> {
+fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<i32> {
     match try_launch_traced(store, prep, flags) {
         Ok(code) => Ok(code),
         Err(e) => {
@@ -174,12 +174,12 @@ fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<Exi
                 &prep.cwd,
                 &prep.env,
             )?;
-            Ok(ExitCode::from(clamp_code(code)))
+            Ok(code)
         }
     }
 }
 
-fn try_launch_traced(store: &Store, prep: &Prepared, flags: &Flags) -> Result<ExitCode> {
+fn try_launch_traced(store: &Store, prep: &Prepared, flags: &Flags) -> Result<i32> {
     let dll = dll_path()?;
     let dll_ansi: Vec<u8> = dll
         .to_string_lossy()
@@ -290,7 +290,7 @@ fn try_launch_traced(store: &Store, prep: &Prepared, flags: &Flags) -> Result<Ex
         }
     }
 
-    Ok(ExitCode::from(clamp_code(result.exit_code)))
+    Ok(result.exit_code)
 }
 
 fn restore_outputs(store: &Store, entry: &Entry) -> Result<()> {
@@ -411,15 +411,6 @@ fn status_line(flags: &Flags, msg: &str) {
     // unconditional (used by tests and scripts that capture stderr).
     if std::io::stderr().is_terminal() || std::env::var_os("MEMO_FORCE_STATUS").is_some() {
         eprintln!("{}", msg);
-    }
-}
-
-/// Exit codes above 255 don't fit in ExitCode; clamp while preserving zero/nonzero.
-fn clamp_code(code: i32) -> u8 {
-    if code == 0 {
-        0
-    } else {
-        (code & 0xff) as u8 | if code & 0xff == 0 { 1 } else { 0 }
     }
 }
 
