@@ -24,7 +24,7 @@ use windows_sys::Win32::System::SystemServices::{
 };
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+    CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
 
@@ -182,8 +182,22 @@ unsafe fn launch_inner(
     }
 
     // Assign to the job (fires NEW_PROCESS for the root), copy the payload, then
-    // resume so the injected DLL's DllMain runs with the payload in place.
-    AssignProcessToJobObject(job, pi.hProcess);
+    // resume so the injected DLL's DllMain runs with the payload in place. If the
+    // job assignment fails we can't account for child processes (the NoHello
+    // cross-check would be unreliable), so abort tracing: kill the still-suspended
+    // child and error, and the caller runs the command untraced.
+    if AssignProcessToJobObject(job, pi.hProcess) == 0 {
+        let e = std::io::Error::last_os_error();
+        windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(job);
+        CloseHandle(port);
+        return Err(anyhow!(
+            "could not assign the process to a job object: {}",
+            e
+        ));
+    }
     memo_detours::DetourCopyPayloadToProcess(
         pi.hProcess,
         &memo_detours::MEMO_GUID,
@@ -329,6 +343,54 @@ fn spawn_reader(
             }
         }
     })
+}
+
+/// Run the command WITHOUT tracing: no injection, no job, no pipes — the child
+/// inherits memo's console directly, exactly as if memo weren't here. Used when
+/// tracing can't be set up (spec §10); the run is never cached. Returns the exit
+/// code.
+pub fn run_untraced(
+    app: &Path,
+    cmdline: &str,
+    cwd: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<i32> {
+    use windows_sys::Win32::System::Threading::CreateProcessW;
+    unsafe {
+        let app_w = wide(&app.to_string_lossy());
+        let mut cmd_w = wide(cmdline);
+        let cwd_w = wide(cwd);
+        let mut envblock = env_block(env);
+        let mut si: STARTUPINFOW = core::mem::zeroed();
+        si.cb = core::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut pi: PROCESS_INFORMATION = core::mem::zeroed();
+        // No STARTF_USESTDHANDLES: the child shares memo's console.
+        let ok = CreateProcessW(
+            app_w.as_ptr(),
+            cmd_w.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0, // bInheritHandles
+            CREATE_UNICODE_ENVIRONMENT,
+            envblock.as_mut_ptr() as *const _,
+            cwd_w.as_ptr(),
+            &si,
+            &mut pi,
+        );
+        if ok == 0 {
+            return Err(anyhow!(
+                "could not start {}: {}",
+                app.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        let mut code: u32 = 0;
+        GetExitCodeProcess(pi.hProcess, &mut code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        Ok(code as i32)
+    }
 }
 
 /// Replay a console log to memo's real stdout/stderr in recorded order.

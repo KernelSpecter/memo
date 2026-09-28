@@ -23,6 +23,18 @@ use std::sync::Mutex;
 static PIPE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn dll_path() -> Result<std::path::PathBuf> {
+    // Optional override (mainly for tests): a path to the hook DLL. A missing
+    // one makes tracing fail, which must fall back to an untraced run.
+    if let Ok(p) = std::env::var("MEMO_HOOK_DLL") {
+        let p = std::path::PathBuf::from(p);
+        if !p.exists() {
+            return Err(anyhow!(
+                "memo_hook.dll (MEMO_HOOK_DLL) not found at {}",
+                p.display()
+            ));
+        }
+        return Ok(p);
+    }
     let exe = std::env::current_exe()?;
     let dir = exe
         .parent()
@@ -144,6 +156,30 @@ fn replay(store: &Store, entry: &Entry, flags: &Flags) -> Result<ExitCode> {
 }
 
 fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<ExitCode> {
+    match try_launch_traced(store, prep, flags) {
+        Ok(code) => Ok(code),
+        Err(e) => {
+            // Tracing could not be set up (no hook DLL, pipe/job/inject failure).
+            // Run the command normally and don't cache it (spec §10).
+            status_line(
+                flags,
+                &format!("memo \u{25cb} not cached: could not trace ({})", e),
+            );
+            if flags.verbose {
+                eprintln!("  - tracing setup failed: {}", e);
+            }
+            let code = crate::launch::run_untraced(
+                &prep.resolved.app,
+                &prep.resolved.cmdline,
+                &prep.cwd,
+                &prep.env,
+            )?;
+            Ok(ExitCode::from(clamp_code(code)))
+        }
+    }
+}
+
+fn try_launch_traced(store: &Store, prep: &Prepared, flags: &Flags) -> Result<ExitCode> {
     let dll = dll_path()?;
     let dll_ansi: Vec<u8> = dll
         .to_string_lossy()
