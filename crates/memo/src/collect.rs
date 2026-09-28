@@ -293,8 +293,20 @@ impl RunState {
         names
     }
 
-    pub fn on_hello(&mut self, pid: u32) {
+    pub fn on_hello(&mut self, pid: u32, image: &str, loaded_modules: &[String]) {
         self.hello_pids.insert(pid);
+        // The process's own executable and the modules the loader mapped before
+        // our hooks were live are read inputs (spec §4.1): if a child's exe or a
+        // loaded DLL is replaced between runs, the run must miss. on_access applies
+        // the ignored-path rule, so %SystemRoot% DLLs drop out.
+        if !image.is_empty() {
+            self.on_access(AccessKind::Read, image);
+        }
+        for m in loaded_modules {
+            if !m.is_empty() {
+                self.on_access(AccessKind::Read, m);
+            }
+        }
     }
 
     pub fn on_new_pid(&mut self, pid: u32) {

@@ -165,7 +165,12 @@ fn handle_client(pipe: HANDLE, state: Arc<Mutex<RunState>>) {
 fn apply(state: &Arc<Mutex<RunState>>, msg: Msg) {
     let mut s = state.lock().unwrap();
     match msg {
-        Msg::Hello { pid, .. } => s.on_hello(pid),
+        Msg::Hello {
+            pid,
+            image,
+            loaded_modules,
+            ..
+        } => s.on_hello(pid, &image, &loaded_modules),
         Msg::Access { kind, path, .. } => s.on_access(kind, &path),
         Msg::PreMutate { path, .. } => s.on_premutate(&path),
         Msg::PreList { path, .. } => s.on_prelist(&path),

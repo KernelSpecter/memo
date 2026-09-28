@@ -167,6 +167,18 @@ fn main() {
                     .expect("spawn child");
                 println!("SPAWNED {} {}", rest, status.code().unwrap_or(-1));
             }
+            "runexe" => {
+                // runexe=<exe path>|<one arg>: run an arbitrary child executable
+                // (so a test can replace it between runs).
+                let (exe, childarg) = rest.split_once('|').unwrap_or((rest, ""));
+                let code = std::process::Command::new(exe)
+                    .arg(childarg)
+                    .status()
+                    .ok()
+                    .and_then(|s| s.code())
+                    .unwrap_or(-1);
+                println!("RANEXE {} {}", exe, code);
+            }
             "net" => {
                 use std::net::TcpStream;
                 use std::time::Duration;

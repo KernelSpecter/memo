@@ -145,9 +145,43 @@ pub fn init(pipe_name: &str, image: &str) -> bool {
         pid,
         ppid: 0,
         image: image.to_string(),
-        loaded_modules: Vec::new(),
+        loaded_modules: loaded_modules(),
     });
     true
+}
+
+/// Full paths of the modules already mapped into this process (the loader mapped
+/// its static imports before our hooks were live, so those file reads are
+/// invisible otherwise). Reported in Hello as read inputs (spec §4.1); memo drops
+/// the ones under ignored prefixes like %SystemRoot%.
+fn loaded_modules() -> Vec<String> {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
+    };
+    let mut out = Vec::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+        if snap == INVALID_HANDLE_VALUE || snap.is_null() {
+            return out;
+        }
+        let mut me: MODULEENTRY32W = core::mem::zeroed();
+        me.dwSize = core::mem::size_of::<MODULEENTRY32W>() as u32;
+        let mut ok = Module32FirstW(snap, &mut me);
+        while ok != 0 {
+            let len = me
+                .szExePath
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(me.szExePath.len());
+            if len > 0 {
+                out.push(String::from_utf16_lossy(&me.szExePath[..len]));
+            }
+            me.dwSize = core::mem::size_of::<MODULEENTRY32W>() as u32;
+            ok = Module32NextW(snap, &mut me);
+        }
+        CloseHandle(snap);
+    }
+    out
 }
 
 pub fn is_active() -> bool {
