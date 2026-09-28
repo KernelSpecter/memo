@@ -35,13 +35,22 @@ pub enum InputFp {
     },
 }
 
-/// Fingerprint of a directory listing: a hash over its non-mutated entries,
-/// plus the case-folded names excluded (the command's own outputs), so
-/// verification recomputes the same hash.
+/// Fingerprint of a directory listing as the command saw it at the moment it
+/// first enumerated the directory (spec §6.2). The hash covers every entry;
+/// entries the tree itself mutated contribute only `(name, is_dir)` — not their
+/// volatile size/mtime — since the tree rewrites its own outputs each run and
+/// those bytes are pinned separately (as outputs). `name_only` records which
+/// case-folded names got that treatment, so verification recomputes identically.
+///
+/// This is what makes a list-then-write converge in two runs: run 1 enumerates
+/// before creating its output (the output is absent from the snapshot), so run 2
+/// — where the output now exists — sees a different listing and re-executes;
+/// run 2's snapshot includes the output by name only, so run 3 matches and
+/// replays despite the output's mtime changing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListingFp {
     pub hash: Hash,
-    pub stripped: Vec<String>,
+    pub name_only: Vec<String>,
 }
 
 /// One entry in a directory listing.
@@ -111,29 +120,28 @@ pub fn build_input_fp(pre: PreState, mutated: bool) -> InputFp {
     }
 }
 
-/// Compute a listing fingerprint over a directory's pre-run entries, excluding
-/// any entry the tree mutated (matched by case-folded name).
-pub fn compute_listing_fp(entries: &[DirEntry], mutated_names: &HashSet<String>) -> ListingFp {
-    let stripped: Vec<String> = mutated_names.iter().cloned().collect();
-    let hash = hash_entries(entries, mutated_names);
-    ListingFp { hash, stripped }
+/// Compute a listing fingerprint over a directory's pre-run entries. Entries
+/// whose case-folded name is in `name_only` (the tree's own mutated outputs)
+/// contribute only `(name, is_dir)`; all others contribute size and mtime too.
+pub fn compute_listing_fp(entries: &[DirEntry], name_only: &HashSet<String>) -> ListingFp {
+    ListingFp {
+        hash: hash_entries(entries, name_only),
+        name_only: name_only.iter().cloned().collect(),
+    }
 }
 
-/// Recompute a listing hash from current entries, excluding the recorded
-/// `stripped` names. Must match `compute_listing_fp`'s hash when nothing
-/// external changed.
-pub fn recompute_listing_hash(entries: &[DirEntry], stripped: &[String]) -> Hash {
-    let set: HashSet<String> = stripped.iter().cloned().collect();
+/// Recompute a listing hash from current entries, giving the recorded
+/// `name_only` names the same name-only treatment. Matches `compute_listing_fp`'s
+/// hash iff the directory's entries are unchanged (mutated entries aside).
+pub fn recompute_listing_hash(entries: &[DirEntry], name_only: &[String]) -> Hash {
+    let set: HashSet<String> = name_only.iter().cloned().collect();
     hash_entries(entries, &set)
 }
 
-fn hash_entries(entries: &[DirEntry], exclude: &HashSet<String>) -> Hash {
-    // Sort by case-folded name for order independence; exclude mutated names.
-    let mut rows: Vec<(String, &DirEntry)> = entries
-        .iter()
-        .map(|e| (case_fold(&e.name), e))
-        .filter(|(folded, _)| !exclude.contains(folded))
-        .collect();
+fn hash_entries(entries: &[DirEntry], name_only: &HashSet<String>) -> Hash {
+    // Sort by case-folded name for order independence.
+    let mut rows: Vec<(String, &DirEntry)> =
+        entries.iter().map(|e| (case_fold(&e.name), e)).collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = blake3::Hasher::new();
@@ -141,8 +149,12 @@ fn hash_entries(entries: &[DirEntry], exclude: &HashSet<String>) -> Hash {
         hasher.update(folded.as_bytes());
         hasher.update(&[0]);
         hasher.update(&[e.is_dir as u8]);
-        hasher.update(&e.size.to_le_bytes());
-        hasher.update(&e.mtime.to_le_bytes());
+        // A mutated entry contributes name + is_dir only: its size/mtime are the
+        // tree's own output, volatile run-to-run and pinned elsewhere.
+        if !name_only.contains(&folded) {
+            hasher.update(&e.size.to_le_bytes());
+            hasher.update(&e.mtime.to_le_bytes());
+        }
         hasher.update(&[0xff]);
     }
     *hasher.finalize().as_bytes()
@@ -257,20 +269,41 @@ mod tests {
     }
 
     #[test]
-    fn listing_excludes_mutated_entries() {
-        // Directory that a command lists, then creates out.js into.
+    fn new_entry_changes_the_hash() {
+        // A file appearing changes the listing — whoever created it. The command
+        // saw the pre-write listing, so on the next run (entry now present) the
+        // run must re-execute, not replay (spec §6.2).
         let pre = vec![DirEntry {
             name: "a.txt".into(),
             is_dir: false,
             size: 1,
             mtime: 10,
         }];
-        let mut mutated = HashSet::new();
-        mutated.insert("out.js".to_string());
-        let fp = compute_listing_fp(&pre, &mutated);
-
-        // On the next run the directory also contains out.js (left by run 1).
+        let fp = compute_listing_fp(&pre, &HashSet::new());
         let after = vec![
+            pre[0].clone(),
+            DirEntry {
+                name: "out.js".into(),
+                is_dir: false,
+                size: 99,
+                mtime: 55,
+            },
+        ];
+        assert_ne!(
+            fp.hash,
+            recompute_listing_hash(&after, &fp.name_only),
+            "a new entry must change the listing hash"
+        );
+    }
+
+    #[test]
+    fn name_only_entry_ignores_size_and_mtime() {
+        // The tree's own output in a listed dir contributes name+is_dir only, so
+        // its changing size/mtime across runs does not destabilize the listing
+        // (this is what lets a list-then-write converge to a replay).
+        let mut name_only = HashSet::new();
+        name_only.insert("out.js".to_string());
+        let run2 = vec![
             DirEntry {
                 name: "a.txt".into(),
                 is_dir: false,
@@ -284,24 +317,9 @@ mod tests {
                 mtime: 55,
             },
         ];
-        let recomputed = recompute_listing_hash(&after, &fp.stripped);
-        assert_eq!(
-            fp.hash, recomputed,
-            "the command's own output must not disturb the listing"
-        );
-    }
-
-    #[test]
-    fn listing_detects_external_new_file() {
-        let pre = vec![DirEntry {
-            name: "a.txt".into(),
-            is_dir: false,
-            size: 1,
-            mtime: 10,
-        }];
-        let fp = compute_listing_fp(&pre, &HashSet::new());
-        // An unrelated file appears (not one of the command's outputs).
-        let after = vec![
+        let fp = compute_listing_fp(&run2, &name_only);
+        // Next run: out.js rewritten (new size + mtime), a.txt unchanged.
+        let run3 = vec![
             DirEntry {
                 name: "a.txt".into(),
                 is_dir: false,
@@ -309,13 +327,32 @@ mod tests {
                 mtime: 10,
             },
             DirEntry {
-                name: "intruder".into(),
+                name: "out.js".into(),
                 is_dir: false,
-                size: 3,
-                mtime: 30,
+                size: 123,
+                mtime: 999,
             },
         ];
-        let recomputed = recompute_listing_hash(&after, &fp.stripped);
-        assert_ne!(fp.hash, recomputed);
+        assert_eq!(
+            fp.hash,
+            recompute_listing_hash(&run3, &fp.name_only),
+            "a mutated entry's size/mtime must not affect the listing hash"
+        );
+        // But a.txt changing size does change it.
+        let run3b = vec![
+            DirEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 2,
+                mtime: 10,
+            },
+            DirEntry {
+                name: "out.js".into(),
+                is_dir: false,
+                size: 123,
+                mtime: 999,
+            },
+        ];
+        assert_ne!(fp.hash, recompute_listing_hash(&run3b, &fp.name_only));
     }
 }

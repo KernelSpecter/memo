@@ -51,10 +51,12 @@ fn single_name_lookup_is_not_a_full_listing() {
 }
 
 #[test]
-fn listed_dir_churn_from_own_output_still_hits() {
-    // A command that lists a dir AND writes an output into it should converge to
-    // a steady replay: its own output must not disturb the listing fingerprint.
-    let sb = Sandbox::new("list_churn");
+fn listed_dir_write_converges_then_replays() {
+    // A command that lists a dir AND writes an output into it converges in two
+    // real runs, then replays (spec §6.2 + §12). It must NOT replay run 1's
+    // listing on run 2 — by then the dir really contains the output, which a real
+    // run would see. The recorded listing is what the command saw (pre-write).
+    let sb = Sandbox::new("list_write_converge");
     sb.write("d/a.txt", b"a");
     let d = abs(&sb.path("d"));
     let out = abs(&sb.path("d/out.txt"));
@@ -62,21 +64,30 @@ fn listed_dir_churn_from_own_output_still_hits() {
     let ops = [format!("list={}", d), format!("write={}|generated", out)];
     let ops_ref: Vec<&str> = ops.iter().map(|s| s.as_str()).collect();
 
+    // Run 1: dir has {a.txt}; lists it, writes out.txt.
     let r1 = sb.run(&ops_ref);
-    assert!(r1.executed, "stderr: {}", r1.stderr);
-    // Run 2 sees out.txt (from run 1) in the dir. It's the command's own output,
-    // excluded from the listing fingerprint, so this should replay.
+    assert!(r1.executed && r1.cached(), "stderr: {}", r1.stderr);
+    let run1_stdout = r1.stdout.clone();
+
+    // Run 2: dir now has {a.txt, out.txt} (out.txt left by run 1). A real run
+    // would list both, so this must re-execute, not replay run 1.
     let r2 = sb.run(&ops_ref);
     assert!(
-        r2.replayed() || r2.cached(),
-        "run 2 should replay or re-store, not error; stderr: {}",
+        r2.executed,
+        "run 2 must re-execute (dir changed); stderr: {}",
         r2.stderr
     );
-    // Run 3 should be a stable replay.
+    assert_ne!(
+        r2.stdout, run1_stdout,
+        "run 2's listing should differ from run 1's (out.txt now present)"
+    );
+
+    // Run 3: dir is steady {a.txt, out.txt}, matches run 2 → replay.
     let r3 = sb.run(&ops_ref);
     assert!(
-        !r3.executed,
-        "should converge to replay; stderr: {}",
+        r3.replayed(),
+        "run 3 should converge to a replay; stderr: {}",
         r3.stderr
     );
+    assert_eq!(r3.stdout, r2.stdout, "replay reproduces run 2's output");
 }

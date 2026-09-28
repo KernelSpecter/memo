@@ -4,7 +4,8 @@
 use memo_core::cas::Store as Cas;
 use memo_core::entry::{Entry, Input, Output};
 use memo_core::fingerprint::{
-    build_input_fp, compute_listing_fp, read_dir_entries, FileState, InputFp, PreState,
+    build_input_fp, compute_listing_fp, read_dir_entries, DirEntry, FileState, InputFp, ListingFp,
+    PreState,
 };
 use memo_core::paths::{case_fold, PathId};
 use memo_core::stat::{file_signature, FType};
@@ -56,6 +57,12 @@ pub struct RunState {
     /// mutation except a pure truncating create-or-replace). A subset of
     /// `mutated`: a Truncate-only path is an output but not an input.
     pin_pre: HashSet<PathId>,
+    /// Raw directory entries captured synchronously at the tree's first
+    /// enumeration of each directory (PreList), keyed by directory PathId — what
+    /// the command was about to see, before it wrote into the directory itself.
+    /// The listing fingerprint is computed from these at finalize, once the set
+    /// of the tree's own mutated names in each directory is known.
+    listings: HashMap<PathId, Vec<DirEntry>>,
     hello_pids: HashSet<u32>,
     new_pids: HashSet<u32>,
     taints: Vec<(TaintReason, String)>,
@@ -99,6 +106,7 @@ impl RunState {
             premutated: HashMap::new(),
             mutated: HashSet::new(),
             pin_pre: HashSet::new(),
+            listings: HashMap::new(),
             hello_pids: HashSet::new(),
             new_pids: HashSet::new(),
             taints: Vec::new(),
@@ -176,6 +184,35 @@ impl RunState {
         self.premutated.insert(id, snap);
     }
 
+    /// Snapshot a directory's contents at the moment the tree first enumerates it
+    /// (PreList). Called by the pipe handler; the ack is sent after this returns,
+    /// so the snapshot is exactly what the command is about to see — before the
+    /// tree writes into the directory itself.
+    pub fn on_prelist(&mut self, path: &str) {
+        if self.ignored(path) {
+            return;
+        }
+        let id = self.remember(path);
+        // Mark it listed so finalize treats the directory as an input.
+        self.obs.entry(id.clone()).or_default().listed = true;
+        if self.listings.contains_key(&id) {
+            return;
+        }
+        match read_dir_entries(Path::new(path)) {
+            Ok(entries) => {
+                self.listings.insert(id, entries);
+            }
+            Err(_) => {
+                // Couldn't enumerate what the command is about to read: we can't
+                // prove the listing, so the run must not be cached.
+                self.taints.push((
+                    TaintReason::InternalError,
+                    format!("could not snapshot listing of {}", path),
+                ));
+            }
+        }
+    }
+
     pub fn on_mutate(&mut self, kind: MutateKind, path: &str, target: Option<&str>) {
         for p in std::iter::once(path).chain(target) {
             if self.system_write(p) {
@@ -199,6 +236,37 @@ impl RunState {
                 }
             }
         }
+    }
+
+    /// The listing fingerprint for a directory that was enumerated: the raw
+    /// pre-run entries hashed with the tree's own mutated names in that directory
+    /// treated name-only. None if the directory was never enumerated.
+    fn listing_fp_for(&self, dir_id: &PathId) -> Option<ListingFp> {
+        let entries = self.listings.get(dir_id)?;
+        let dir = self.spelling.get(dir_id).cloned().unwrap_or_default();
+        Some(compute_listing_fp(entries, &self.mutated_names_in(&dir)))
+    }
+
+    /// Case-folded names of mutated entries directly inside `dir` (its own
+    /// outputs), for name-only treatment in the listing fingerprint.
+    fn mutated_names_in(&self, dir: &str) -> HashSet<String> {
+        let prefix = format!("{}\\", PathId::new(dir).0);
+        let mut names = HashSet::new();
+        for id in &self.mutated {
+            if let Some(rest) = id.0.strip_prefix(&prefix) {
+                if !rest.contains('\\') {
+                    names.insert(rest.to_string());
+                }
+            }
+            if let Some(spelled) = self.spelling.get(id) {
+                if let Some(rest) = PathId::new(spelled).0.strip_prefix(&prefix) {
+                    if !rest.contains('\\') {
+                        names.insert(case_fold(rest));
+                    }
+                }
+            }
+        }
+        names
     }
 
     pub fn on_hello(&mut self, pid: u32) {
@@ -259,7 +327,12 @@ impl RunState {
         let empty = Obs::default();
         let ids: Vec<PathId> = {
             let mut set: HashSet<PathId> = HashSet::new();
-            for id in self.obs.keys().chain(self.pin_pre.iter()) {
+            for id in self
+                .obs
+                .keys()
+                .chain(self.pin_pre.iter())
+                .chain(self.listings.keys())
+            {
                 set.insert(id.clone());
             }
             set.into_iter().collect()
@@ -293,7 +366,9 @@ impl RunState {
                         ));
                         PreState::Absent
                     }
-                    Some(PreSnap::Dir) => PreState::Dir { listing: None },
+                    Some(PreSnap::Dir) => PreState::Dir {
+                        listing: self.listing_fp_for(id),
+                    },
                     Some(PreSnap::File { size, mtime, hash }) => {
                         if o.read && hash.is_none() {
                             // The snapshot couldn't read the pre-run content
@@ -330,13 +405,10 @@ impl RunState {
                         });
                     }
                     Some(sig) if sig.ftype == FType::Dir => {
-                        let listing = if o.listed {
-                            read_dir_entries(Path::new(&path)).ok().map(|entries| {
-                                compute_listing_fp(&entries, &self.mutated_names_in(&path))
-                            })
-                        } else {
-                            None
-                        };
+                        // Use the pre-run snapshot taken at first enumeration, not
+                        // a re-read at finalize (which would include the tree's own
+                        // writes into the dir). None if it was never enumerated.
+                        let listing = self.listing_fp_for(id);
                         inputs.push(Input {
                             path,
                             fp: InputFp::Dir { listing },
@@ -404,32 +476,6 @@ impl RunState {
             outputs,
             console,
         })
-    }
-
-    /// Case-folded names of mutated entries directly inside `dir`.
-    fn mutated_names_in(&self, dir: &str) -> HashSet<String> {
-        let dir_id = PathId::new(dir).0;
-        let prefix = format!("{}\\", dir_id);
-        let mut names = HashSet::new();
-        for id in &self.mutated {
-            if let Some(rest) = id.0.strip_prefix(&prefix) {
-                if !rest.contains('\\') {
-                    names.insert(rest.to_string());
-                }
-            }
-        }
-        // Also spelled forms.
-        for id in &self.mutated {
-            if let Some(spelled) = self.spelling.get(id) {
-                let sid = PathId::new(spelled).0;
-                if let Some(rest) = sid.strip_prefix(&prefix) {
-                    if !rest.contains('\\') {
-                        names.insert(case_fold(rest));
-                    }
-                }
-            }
-        }
-        names
     }
 }
 

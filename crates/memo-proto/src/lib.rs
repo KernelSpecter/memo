@@ -171,6 +171,15 @@ pub enum Msg {
         seq: u64,
         path: String,
     },
+    /// Sent before the tree enumerates a directory for the first time; memo
+    /// snapshots the directory's contents (what the command is about to see) and
+    /// acks with one byte. The hook blocks until it reads the ack, exactly like
+    /// PreMutate, so the snapshot precedes any change the tree then makes.
+    PreList {
+        pid: u32,
+        seq: u64,
+        path: String,
+    },
     Mutate {
         pid: u32,
         kind: MutateKind,
@@ -287,11 +296,22 @@ mod tests {
                 seq: 1,
                 path: "C:\\proj\\out.js".into(),
             },
+            Msg::PreList {
+                pid: 42,
+                seq: 2,
+                path: "C:\\proj\\src".into(),
+            },
             Msg::Mutate {
                 pid: 42,
                 kind: MutateKind::Rename,
                 path: "C:\\proj\\tmp".into(),
                 target: Some("C:\\proj\\final".into()),
+            },
+            Msg::Mutate {
+                pid: 42,
+                kind: MutateKind::Truncate,
+                path: "C:\\proj\\out.js".into(),
+                target: None,
             },
             Msg::Taint {
                 pid: 42,

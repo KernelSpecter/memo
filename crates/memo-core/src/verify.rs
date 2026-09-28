@@ -26,7 +26,7 @@ pub fn verify_input(inp: &Input, sc: &Mutex<StatCache>) -> bool {
             match listing {
                 None => true,
                 Some(lfp) => match read_dir_entries(path) {
-                    Ok(entries) => recompute_listing_hash(&entries, &lfp.stripped) == lfp.hash,
+                    Ok(entries) => recompute_listing_hash(&entries, &lfp.name_only) == lfp.hash,
                     Err(_) => false,
                 },
             }

@@ -269,6 +269,31 @@ pub fn premutate_wait(path: String) {
     }
 }
 
+/// Send a PreList for `path` and block until memo acknowledges, so memo
+/// snapshots the directory's contents before the tree changes them. Same
+/// teardown short-circuit and blocking semantics as `premutate_wait`.
+pub fn prelist_wait(path: String) {
+    if shutting_down() {
+        return;
+    }
+    let cell = match CLIENT.get() {
+        Some(c) => c,
+        None => return,
+    };
+    if let Ok(mut g) = cell.lock() {
+        g.seq += 1;
+        let seq = g.seq;
+        let pid = g.pid;
+        let mut buf = Vec::with_capacity(64);
+        if write_msg(&mut buf, &Msg::PreList { pid, seq, path }).is_err() {
+            return;
+        }
+        if write_all(g.pipe, &buf) {
+            let _ = read_one_byte(g.pipe);
+        }
+    }
+}
+
 /// Report the child spawn.
 pub fn child_spawned(child_pid: u32, injected: bool) {
     send(Msg::ChildSpawned {

@@ -492,7 +492,11 @@ unsafe fn on_dir_query(file_handle: HANDLE, file_name: *mut UNICODE_STRING, stat
                 client::access(AccessKind::Probe, path);
             }
         }
-        _ => client::access(AccessKind::List, dir),
+        // A real enumeration: snapshot the directory synchronously (PreList) so
+        // memo records what the command is about to see, before the tree writes
+        // into the directory itself. Deduped by memo (a repeat PreList for a dir
+        // already snapshotted just re-acks).
+        _ => client::prelist_wait(dir),
     }
 }
 

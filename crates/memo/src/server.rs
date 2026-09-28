@@ -149,7 +149,7 @@ fn handle_client(pipe: HANDLE, state: Arc<Mutex<RunState>>) {
     loop {
         match read_msg(&mut reader) {
             Ok(Some(msg)) => {
-                let needs_ack = matches!(msg, Msg::PreMutate { .. });
+                let needs_ack = matches!(msg, Msg::PreMutate { .. } | Msg::PreList { .. });
                 apply(&state, msg);
                 if needs_ack {
                     // Snapshot is done; release the client.
@@ -168,6 +168,7 @@ fn apply(state: &Arc<Mutex<RunState>>, msg: Msg) {
         Msg::Hello { pid, .. } => s.on_hello(pid),
         Msg::Access { kind, path, .. } => s.on_access(kind, &path),
         Msg::PreMutate { path, .. } => s.on_premutate(&path),
+        Msg::PreList { path, .. } => s.on_prelist(&path),
         Msg::Mutate {
             kind, path, target, ..
         } => s.on_mutate(kind, &path, target.as_deref()),
