@@ -428,6 +428,49 @@ unsafe extern "system" fn h_ntfscontrolfile(
     )
 }
 
+/// Classify a directory-query result. A query carrying a specific (non-wildcard)
+/// `FileName` filter is a single-name lookup — `FindFirstFile("dir\\exact")`,
+/// `GetLongPathName`, stat-by-enumeration — not an enumeration of the whole
+/// directory, so it is reported as a Probe of `dir\name`. Only a query with no
+/// filter or a wildcard (`*`/`?`) fingerprints the directory as a List.
+unsafe fn on_dir_query(file_handle: HANDLE, file_name: *mut UNICODE_STRING, status: NTSTATUS) {
+    let filter = if !file_name.is_null() {
+        let us = &*file_name;
+        if !us.Buffer.is_null() && us.Length > 0 {
+            let len = (us.Length / 2) as usize;
+            Some(String::from_utf16_lossy(std::slice::from_raw_parts(
+                us.Buffer, len,
+            )))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let dir = match handle_to_win32(file_handle) {
+        Some(d) => d,
+        None => return,
+    };
+    match filter {
+        Some(name) if !name.is_empty() && !name.contains('*') && !name.contains('?') => {
+            let path = format!("{}\\{}", dir.trim_end_matches('\\'), name);
+            let absent = matches!(
+                status,
+                STATUS_NO_SUCH_FILE
+                    | STATUS_NO_MORE_FILES
+                    | STATUS_OBJECT_NAME_NOT_FOUND
+                    | STATUS_OBJECT_PATH_NOT_FOUND
+            );
+            if absent {
+                client::access(AccessKind::ProbeAbsent, path);
+            } else {
+                client::access(AccessKind::Probe, path);
+            }
+        }
+        _ => client::access(AccessKind::List, dir),
+    }
+}
+
 // ---- NtQueryDirectoryFileEx (directory listing) ----
 
 #[allow(clippy::too_many_arguments)]
@@ -472,9 +515,7 @@ unsafe extern "system" fn h_ntquerydirectoryfileex(
         file_name,
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if let Some(dir) = handle_to_win32(file_handle) {
-            client::access(AccessKind::List, dir);
-        }
+        on_dir_query(file_handle, file_name, status)
     }));
     status
 }
@@ -526,9 +567,7 @@ unsafe extern "system" fn h_ntquerydirectoryfile(
         restart_scan,
     );
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        if let Some(dir) = handle_to_win32(file_handle) {
-            client::access(AccessKind::List, dir);
-        }
+        on_dir_query(file_handle, file_name, status)
     }));
     status
 }

@@ -9,8 +9,9 @@ use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GetFullPathNameW, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FindClose, FindFirstFileW, GetFullPathNameW, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    WIN32_FIND_DATAW,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 
@@ -219,5 +220,22 @@ pub fn nt_delete(win32: &str) {
         };
         let st = func(&mut oa);
         println!("NTDELETE {} status={:#x}", win32, st);
+    }
+}
+
+/// Look up one exact name via FindFirstFileW, which issues a single-name
+/// NtQueryDirectoryFile filter on the parent directory (the I7 scenario).
+/// Prints `FINDFIRST <path> found=<bool>`.
+pub fn find_first(path: &str) {
+    unsafe {
+        let w = wide0(path);
+        let mut data: WIN32_FIND_DATAW = zeroed();
+        let h = FindFirstFileW(w.as_ptr(), &mut data);
+        if h == INVALID_HANDLE_VALUE || h.is_null() {
+            println!("FINDFIRST {} found=false", path);
+        } else {
+            println!("FINDFIRST {} found=true", path);
+            FindClose(h);
+        }
     }
 }

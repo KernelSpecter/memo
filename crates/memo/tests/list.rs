@@ -29,6 +29,28 @@ fn listing_then_new_file_misses() {
 }
 
 #[test]
+fn single_name_lookup_is_not_a_full_listing() {
+    // FindFirstFile("dir\\exact") issues a single-name NtQueryDirectoryFile
+    // filter. That is a probe of one path, not an enumeration of the directory,
+    // so an unrelated sibling appearing must not cause a miss.
+    let sb = Sandbox::new("findfirst_probe");
+    sb.write("d/a.txt", b"a");
+    let target = abs(&sb.path("d/a.txt"));
+    let op = format!("findfirst={}", target);
+
+    let r1 = sb.run(&[&op]);
+    assert!(r1.cached(), "stderr: {}", r1.stderr);
+
+    sb.write("d/b.txt", b"b");
+    let r2 = sb.run(&[&op]);
+    assert!(
+        r2.replayed(),
+        "a single-name lookup must not fingerprint the whole dir; stderr: {}",
+        r2.stderr
+    );
+}
+
+#[test]
 fn listed_dir_churn_from_own_output_still_hits() {
     // A command that lists a dir AND writes an output into it should converge to
     // a steady replay: its own output must not disturb the listing fingerprint.

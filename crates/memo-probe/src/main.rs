@@ -219,6 +219,9 @@ fn main() {
                 };
                 println!("CTRLC {}", rest);
             }
+            "findfirst" => {
+                ntffi::find_first(rest);
+            }
             "qbyname" => {
                 ntffi::query_by_name(rest);
             }

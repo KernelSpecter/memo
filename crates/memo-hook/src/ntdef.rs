@@ -16,6 +16,9 @@ pub type NTSTATUS = i32;
 pub const STATUS_SUCCESS: NTSTATUS = 0;
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NTSTATUS = 0xC0000034u32 as i32;
 pub const STATUS_OBJECT_PATH_NOT_FOUND: NTSTATUS = 0xC000003Au32 as i32;
+/// A directory query with a single-name filter that matched nothing.
+pub const STATUS_NO_SUCH_FILE: NTSTATUS = 0xC000000Fu32 as i32;
+pub const STATUS_NO_MORE_FILES: NTSTATUS = 0x80000006u32 as i32;
 
 #[repr(C)]
 pub struct UNICODE_STRING {
