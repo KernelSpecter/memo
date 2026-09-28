@@ -88,9 +88,12 @@ pub fn is_active() -> bool {
 }
 
 pub fn pid() -> u32 {
+    // try_lock, not lock: this runs on hook paths (including DllMain's
+    // DLL_PROCESS_DETACH), which must never block on a lock that a
+    // now-gone thread may still hold during process teardown.
     CLIENT
         .get()
-        .map(|m| m.lock().unwrap().pid)
+        .and_then(|m| m.try_lock().ok().map(|g| g.pid))
         .unwrap_or_else(|| unsafe { GetCurrentProcessId() })
 }
 
@@ -133,7 +136,11 @@ pub fn send(msg: Msg) {
     if write_msg(&mut buf, &msg).is_err() {
         return;
     }
-    if let Ok(g) = cell.lock() {
+    // try_lock, not lock: a hook path (including DllMain's
+    // DLL_PROCESS_DETACH) must never block waiting for this lock — if
+    // another thread holds it (or held it and is now gone, during process
+    // teardown), just drop the message rather than risk a deadlock.
+    if let Ok(g) = cell.try_lock() {
         let _ = write_all(g.pipe, &buf);
     }
 }

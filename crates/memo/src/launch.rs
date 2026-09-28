@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{
     CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-    WAIT_OBJECT_0,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
@@ -24,7 +24,7 @@ use windows_sys::Win32::System::SystemServices::{
 };
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, ResumeThread, WaitForSingleObject, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, INFINITE, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
 };
 use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
 
@@ -203,8 +203,48 @@ unsafe fn launch_inner(
 
     ResumeThread(pi.hThread);
 
-    // Wait for the root process to exit.
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    // Wait for the root process to exit, but never forever: poll in bounded
+    // slices instead of an INFINITE wait, so a bug anywhere in the injected
+    // hook (or a runaway target) can never hang memo itself. WaitForSingleObject
+    // still returns the instant the handle signals (a normal exit is not
+    // delayed by the slice length), so this is identical in effect to the old
+    // INFINITE wait for every real-world run; only a root that outlives
+    // ROOT_WAIT_CAP is force-killed and reported as outlived, the same
+    // treatment as a descendant that outlives the post-exit grace period
+    // below.
+    const ROOT_WAIT_SLICE_MS: u32 = 1_000;
+    const ROOT_WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+    let root_deadline = std::time::Instant::now() + ROOT_WAIT_CAP;
+    let mut root_outlived = false;
+    loop {
+        match WaitForSingleObject(pi.hProcess, ROOT_WAIT_SLICE_MS) {
+            WAIT_OBJECT_0 => break,
+            WAIT_TIMEOUT => {
+                if std::time::Instant::now() >= root_deadline {
+                    root_outlived = true;
+                    break;
+                }
+            }
+            // WAIT_FAILED or anything unexpected: stop waiting rather than
+            // spin forever on a handle that will never signal.
+            _ => break,
+        }
+    }
+    if root_outlived {
+        // A runaway root: force the whole tree down, then give it a bounded
+        // window to actually reach the signaled state. TerminateJobObject
+        // only requests termination — it doesn't wait — so GetExitCodeProcess
+        // right after it could still observe STILL_ACTIVE.
+        TerminateJobObject(job, 1);
+        let term_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match WaitForSingleObject(pi.hProcess, ROOT_WAIT_SLICE_MS) {
+                WAIT_OBJECT_0 => break,
+                WAIT_TIMEOUT if std::time::Instant::now() < term_deadline => continue,
+                _ => break,
+            }
+        }
+    }
     let mut code: u32 = 0;
     GetExitCodeProcess(pi.hProcess, &mut code);
 
@@ -239,10 +279,12 @@ unsafe fn launch_inner(
         }
     }
 
-    let outlived = !zero;
+    let outlived = root_outlived || !zero;
     if outlived {
-        // A process is still alive after the grace period: kill the tree so we
-        // don't hang, and let the caller taint the run.
+        // A process is still alive after the grace period (or the root itself
+        // was a runaway, above): kill the tree so we don't hang, and let the
+        // caller taint the run. Harmless to call again if root_outlived
+        // already terminated the job.
         TerminateJobObject(job, 1);
     }
 
@@ -325,8 +367,3 @@ pub fn replay_console(log: &ConsoleLog) {
     let _ = out.flush();
     let _ = err.flush();
 }
-
-/// Guard against an unused import warning for WAIT_OBJECT_0 (kept for clarity in
-/// the wait logic's intent).
-#[allow(dead_code)]
-const _WAIT_OK: u32 = WAIT_OBJECT_0;

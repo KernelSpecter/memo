@@ -50,12 +50,16 @@ fn current_image_path() -> String {
 }
 
 #[no_mangle]
-pub extern "system" fn DllMain(hinst: HMODULE, reason: u32, _reserved: *mut c_void) -> BOOL {
+pub extern "system" fn DllMain(hinst: HMODULE, reason: u32, reserved: *mut c_void) -> BOOL {
     match reason {
         DLL_PROCESS_ATTACH => {
             let _ = std::panic::catch_unwind(|| on_attach(hinst));
         }
-        DLL_PROCESS_DETACH => {
+        // reserved == null => a dynamic unload (FreeLibrary): safe to send Bye.
+        // reserved != null (the `_` arm below) => process termination: other
+        // threads are gone and the loader lock is held; touching any lock can
+        // deadlock, so do nothing at all.
+        DLL_PROCESS_DETACH if reserved.is_null() => {
             let _ = std::panic::catch_unwind(|| {
                 if client::is_active() {
                     client::bye(true);

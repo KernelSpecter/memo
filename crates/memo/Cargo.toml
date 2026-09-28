@@ -36,3 +36,6 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 tempfile = "3"
+# Extra windows-sys features used only by integration tests (process-tree
+# cleanup in exit_hang.rs), unified with the [dependencies] entry above.
+windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp"] }

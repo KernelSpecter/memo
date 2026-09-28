@@ -78,6 +78,45 @@ fn main() {
                 let _ = std::fs::rename(from, to);
                 println!("RENAMED {} {}", from, to);
             }
+            "threads" => {
+                // threads=<n>: spawn n threads that each hammer a small
+                // (Cargo.toml-sized), hooked file with opens/reads, then the
+                // main thread exits abruptly (no join) while they're still
+                // running. This reproduces the DLL_PROCESS_DETACH condition
+                // that must never block: other threads live and mid file-I/O
+                // (so possibly holding memo_hook's client lock) when
+                // ExitProcess tears the process down.
+                let n: usize = rest.parse().unwrap_or(0);
+                println!("THREADS {}", n);
+                // A fixed name (not per-pid): this process exits abruptly by
+                // design and never removes the file, so a per-pid name would
+                // leave one orphaned temp file behind per run.
+                let path = std::env::temp_dir().join("memo-probe-threads.tmp");
+                // Cargo.toml-sized: a small file, not empty, not huge.
+                std::fs::write(&path, vec![b'x'; 1400]).unwrap();
+
+                let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                for _ in 0..n {
+                    let path = path.clone();
+                    let started = started.clone();
+                    std::thread::spawn(move || {
+                        for i in 0..200 {
+                            let _ = std::fs::read(&path);
+                            if i == 0 {
+                                started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                    });
+                }
+                // Make sure every thread has actually performed at least one
+                // hooked file op before we exit, so the abrupt exit races
+                // against live, in-flight hook activity rather than threads
+                // that never got scheduled.
+                while started.load(std::sync::atomic::Ordering::SeqCst) < n {
+                    std::thread::yield_now();
+                }
+                std::process::exit(0);
+            }
             "spawn" => {
                 // Spawn ourselves to run one op in a child process.
                 let exe = std::env::current_exe().unwrap();
