@@ -128,6 +128,11 @@ pub enum Classified {
     File(String),
     /// A non-filesystem device (pipe, console, socket, nul, ...). Not tracked.
     Device,
+    /// An NT path we can't map to a stable Win32 path (a volume without a drive
+    /// letter, an unknown HarddiskVolume, some other `\Device\`/`\??\` object).
+    /// It might be a real file we'd fail to fingerprint, so the caller taints
+    /// rather than tracking it as a relative file or silently ignoring it.
+    Unknown(String),
 }
 
 /// Convert an NT-namespace path to a Win32 path, or classify it as a device.
@@ -157,8 +162,10 @@ pub fn from_nt(nt: &str, vols: &VolumeMap) -> Classified {
     }
     // Reserved DOS names and pipe aliases.
     let tail = lower.trim_start_matches("\\??\\");
-    if matches!(tail, "nul" | "con" | "conin$" | "conout$")
-        || tail.starts_with("pipe\\")
+    if matches!(
+        tail,
+        "nul" | "con" | "conin$" | "conout$" | "mountpointmanager"
+    ) || tail.starts_with("pipe\\")
         || tail == "pipe"
     {
         return Classified::Device;
@@ -169,7 +176,18 @@ pub fn from_nt(nt: &str, vols: &VolumeMap) -> Classified {
         if let Some(unc) = strip_prefix_ci(rest, "UNC\\") {
             return Classified::File(normalize(&format!("\\\\{}", unc)));
         }
-        return Classified::File(normalize(rest));
+        if is_drive_path(rest) {
+            return Classified::File(normalize(rest));
+        }
+        // A bare DOS-device name — \??\Nsi, \??\Tcp, \??\MountPointManager,
+        // \??\PhysicalDrive0, \??\Volume{GUID} — is a device object, not a file:
+        // ignore it. A path THROUGH an unmapped object (\??\Volume{GUID}\file)
+        // could be a real file we can't map to a stable key, so taint (Unknown)
+        // rather than resolving it against memo's cwd as a relative path.
+        if !rest.contains('\\') {
+            return Classified::Device;
+        }
+        return Classified::Unknown(nt.to_string());
     }
 
     // \Device\HarddiskVolumeN\rest → X:\rest
@@ -185,8 +203,9 @@ pub fn from_nt(nt: &str, vols: &VolumeMap) -> Classified {
                 return Classified::File(normalize(&format!("{}:\\{}", drive, rest)));
             }
         }
-        // Unknown volume: treat as device (can't map to a stable path).
-        return Classified::Device;
+        // Unknown volume: we can't map it to a stable path, and it may hold a
+        // real file — taint rather than silently dropping it.
+        return Classified::Unknown(nt.to_string());
     }
 
     // Already a Win32 UNC or drive path.
@@ -194,13 +213,20 @@ pub fn from_nt(nt: &str, vols: &VolumeMap) -> Classified {
         return Classified::File(normalize(nt));
     }
 
-    // Anything else NT-namespaced we don't understand → device (untracked).
+    // Anything else NT-namespaced we don't understand: it isn't a device we
+    // recognize and we can't map it to a Win32 path — taint rather than ignore.
     if nt.starts_with("\\Device\\") || nt.starts_with("\\??\\") {
-        return Classified::Device;
+        return Classified::Unknown(nt.to_string());
     }
 
     // Fallback: relative or odd — normalize and treat as file.
     Classified::File(normalize(nt))
+}
+
+/// Whether `p` begins with a `X:` drive spec.
+fn is_drive_path(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()
 }
 
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -294,9 +320,21 @@ mod tests {
     }
 
     #[test]
-    fn nt_unknown_volume_is_device() {
-        assert_eq!(
+    fn nt_unmappable_paths_are_unknown() {
+        // An unknown HarddiskVolume can't be mapped to a drive — taint, don't
+        // silently drop (it may hold a real file).
+        assert!(matches!(
             from_nt("\\Device\\HarddiskVolume9\\x", &vols()),
+            Classified::Unknown(_)
+        ));
+        // A volume without a drive letter is not a relative file.
+        assert!(matches!(
+            from_nt("\\??\\Volume{abc}\\x", &vols()),
+            Classified::Unknown(_)
+        ));
+        // MountPointManager is a known control device (ignored, not tainted).
+        assert_eq!(
+            from_nt("\\??\\MountPointManager", &vols()),
             Classified::Device
         );
     }

@@ -51,6 +51,15 @@ unsafe fn pre_open(
     let classified = classify_object(oa);
     let path = match classified {
         Some(Classified::File(p)) => Some(p),
+        Some(Classified::Unknown(p)) => {
+            // A path we can't map to a stable Win32 path: don't track it as a
+            // file, but taint so the run isn't cached from an unobserved input.
+            client::taint(
+                TaintReason::InternalError,
+                &format!("unmappable path {}", p),
+            );
+            None
+        }
         _ => None,
     };
     let by_id = options & FILE_OPEN_BY_FILE_ID != 0;
@@ -216,14 +225,21 @@ unsafe extern "system" fn h_ntopenfile(
 // ---- NtQueryAttributesFile / NtQueryFullAttributesFile (path-based stat) ----
 
 unsafe fn query_attrs_common(oa: *mut OBJECT_ATTRIBUTES, status: NTSTATUS) {
-    if let Some(Classified::File(p)) = classify_object(oa) {
-        if status == STATUS_SUCCESS {
-            client::access(AccessKind::Probe, p);
-        } else if is_not_found(status) {
-            client::access(AccessKind::ProbeAbsent, p);
-        } else {
-            client::access(AccessKind::Probe, p);
+    match classify_object(oa) {
+        Some(Classified::File(p)) => {
+            if is_not_found(status) {
+                client::access(AccessKind::ProbeAbsent, p);
+            } else {
+                client::access(AccessKind::Probe, p);
+            }
         }
+        Some(Classified::Unknown(p)) => {
+            client::taint(
+                TaintReason::InternalError,
+                &format!("unmappable path {}", p),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -321,7 +337,7 @@ fn classify_target(raw: &str) -> Option<String> {
     use memo_core::paths::{from_nt, VolumeMap};
     match from_nt(raw, &VolumeMap::from_system()) {
         Classified::File(p) => Some(p),
-        Classified::Device => None,
+        Classified::Device | Classified::Unknown(_) => None,
     }
 }
 
@@ -630,6 +646,13 @@ unsafe extern "system" fn h_ntdeletefile(oa: *mut OBJECT_ATTRIBUTES) -> NTSTATUS
     }
     let path = catch_unwind(AssertUnwindSafe(|| match classify_object(oa) {
         Some(Classified::File(p)) => Some(p),
+        Some(Classified::Unknown(p)) => {
+            client::taint(
+                TaintReason::InternalError,
+                &format!("unmappable path {}", p),
+            );
+            None
+        }
         _ => None,
     }))
     .unwrap_or(None);
