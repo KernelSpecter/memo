@@ -490,7 +490,7 @@ pub type NtQueryDirectoryFileExFn = unsafe extern "system" fn(
     *mut UNICODE_STRING,
 ) -> NTSTATUS;
 
-unsafe fn proc_addr(module: *mut c_void, name: &str) -> *mut c_void {
+pub(crate) unsafe fn proc_addr(module: *mut c_void, name: &str) -> *mut c_void {
     let cname: Vec<u8> = name.bytes().chain(std::iter::once(0)).collect();
     match GetProcAddress(module as _, cname.as_ptr()) {
         Some(f) => f as *mut c_void,
@@ -567,10 +567,13 @@ unsafe fn install_inner() {
 
     // Child-process propagation hooks (Task 10).
     crate::childhook::attach_child_hooks();
+    crate::ctrlhook::attach();
 
     if DetourTransactionCommit() != 0 {
         client::taint(TaintReason::HookInstallFailed, "txn commit");
+        return;
     }
+    crate::ctrlhook::register();
 }
 
 /// `real` points at the static holding the original function; Detours

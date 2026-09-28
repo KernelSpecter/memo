@@ -153,6 +153,7 @@ fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<Exi
 
     let server = PipeServer::start(pipe_name.clone(), state.clone())?;
 
+    let ctrl = crate::interrupt::Guard::install();
     let t0 = std::time::Instant::now();
     let result = launch(
         &prep.resolved.app,
@@ -166,6 +167,8 @@ fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<Exi
 
     // Ensure all messages are folded in before finalizing.
     server.shutdown();
+    let interrupted = ctrl.interrupted();
+    drop(ctrl);
 
     let result = result?;
 
@@ -173,6 +176,12 @@ fn launch_and_store(store: &Store, prep: &Prepared, flags: &Flags) -> Result<Exi
         let mut s = state.lock().unwrap();
         for pid in &result.new_pids {
             s.on_new_pid(*pid);
+        }
+        if interrupted {
+            s.on_taint(
+                memo_proto::TaintReason::Interrupted,
+                "Ctrl+C/Ctrl+Break reached memo".into(),
+            );
         }
         if result.outlived {
             s.on_taint(

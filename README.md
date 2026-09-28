@@ -131,7 +131,9 @@ normally but aren't stored (`-v` shows why):
 - a write under `%SystemRoot%` (reads there are ignored, and a write the OS
   denies doesn't count).
 
-Ctrl+C stops memo along with the command, and an interrupted run is never cached.
+Ctrl+C (or Ctrl+Break) goes to the command as usual. memo stays alive, passes
+the command's output and exit code through, and never caches an interrupted
+run, even if the command handles the interrupt and exits 0.
 
 ### Blind spots
 

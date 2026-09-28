@@ -2,6 +2,7 @@
 
 mod cli;
 mod collect;
+mod interrupt;
 mod launch;
 mod resolve;
 mod run;

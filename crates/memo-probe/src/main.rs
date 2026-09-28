@@ -130,10 +130,63 @@ fn main() {
             "exit" => {
                 exit_code = rest.parse().unwrap_or(0);
             }
+            "ctrlc" => {
+                // ctrlc=swallow: handle Ctrl+C and keep going, like a test
+                // runner that catches SIGINT and exits 0 with partial output.
+                // ctrlc=enable: clear an inherited ignore-Ctrl+C flag (set on
+                // every descendant of a CREATE_NEW_PROCESS_GROUP process).
+                use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+                unsafe {
+                    if rest == "enable" {
+                        SetConsoleCtrlHandler(None, 0)
+                    } else {
+                        SetConsoleCtrlHandler(Some(swallow), 1)
+                    }
+                };
+                println!("CTRLC {}", rest);
+            }
+            "ready" => {
+                // ready=<path>: signal the test (put it under %TEMP%, which
+                // memo ignores).
+                let _ = std::fs::write(rest, b"");
+            }
+            "sleep" => {
+                let ms = rest.parse().unwrap_or(0);
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+            }
+            "sendctrl" => {
+                // sendctrl=<c|break>:<pid>: deliver Ctrl+C or Ctrl+Break to
+                // every process on <pid>'s console, as a keypress would. Not
+                // run under memo.
+                use windows_sys::Win32::System::Console::*;
+                let (kind, pid) = rest.split_once(':').unwrap_or(("c", rest));
+                let event = if kind == "break" {
+                    CTRL_BREAK_EVENT
+                } else {
+                    CTRL_C_EVENT
+                };
+                let pid: u32 = pid.parse().unwrap_or(0);
+                let ok = unsafe {
+                    FreeConsole();
+                    // Swallow it ourselves: the event reaches every process on
+                    // the console, us included, and the NULL-handler ignore
+                    // flag covers only Ctrl+C, not Ctrl+Break.
+                    AttachConsole(pid) != 0
+                        && SetConsoleCtrlHandler(Some(swallow), 1) != 0
+                        && GenerateConsoleCtrlEvent(event, 0) != 0
+                };
+                // stdout may be gone after FreeConsole; the exit code reports.
+                exit_code = if ok { 0 } else { 1 };
+            }
             _ => {}
         }
     }
     std::process::exit(exit_code);
+}
+
+/// Console control handler that handles every event (the process keeps going).
+unsafe extern "system" fn swallow(_: u32) -> i32 {
+    1
 }
 
 /// TCP connect via ConnectEx, the path libuv (so Node) uses. At the AFD layer

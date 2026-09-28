@@ -5,6 +5,7 @@
 
 mod childhook;
 mod client;
+mod ctrlhook;
 mod hooks;
 mod ntdef;
 mod pathres;
