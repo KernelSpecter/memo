@@ -227,6 +227,18 @@ pub fn mutate(kind: MutateKind, path: String, target: Option<String>) {
 /// snapshotted the pre-run state before the mutation happens). Best-effort: if
 /// the pipe is gone, returns without blocking.
 pub fn premutate_wait(path: String) {
+    // During process teardown, skip the snapshot handshake entirely: don't
+    // lock, don't send, don't wait for the ack. A mutation observed during
+    // teardown is never cached anyway (the run is ending and memo's pipe
+    // server is gone), so there's nothing worth blocking for -- and blocking
+    // here is exactly the C5 hang class this task closes: CLIENT may be held
+    // by a thread that no longer exists (deadlock on the lock itself), or
+    // memo's server may already be gone (deadlock waiting for an ack that
+    // will never arrive). The normal (not shutting down) path is unchanged:
+    // it must still block for the ack so the snapshot precedes the mutation.
+    if shutting_down() {
+        return;
+    }
     let cell = match CLIENT.get() {
         Some(c) => c,
         None => return,
