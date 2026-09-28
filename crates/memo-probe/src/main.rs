@@ -90,6 +90,16 @@ fn main() {
                 let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(200));
                 println!("NET {}", rest);
             }
+            "bind" => {
+                // A socket that is created and bound but never connects or
+                // sends: not network access, so it must stay cacheable.
+                let _ = std::net::UdpSocket::bind(rest);
+                println!("BIND {}", rest);
+            }
+            "connectex" => {
+                connect_ex(rest);
+                println!("CONNECTEX {}", rest);
+            }
             "concat" => {
                 // concat=<a>|<b>|<out>: out = contents(a) ++ contents(b).
                 let parts: Vec<&str> = rest.split('|').collect();
@@ -118,4 +128,63 @@ fn main() {
         }
     }
     std::process::exit(exit_code);
+}
+
+/// TCP connect via ConnectEx, the path libuv (so Node) uses. At the AFD layer
+/// it is a different request from connect(). Connect only, no data sent, so a
+/// send can't stand in for a missed connect.
+fn connect_ex(addr: &str) {
+    use std::mem::{size_of, zeroed};
+    use std::ptr::{null, null_mut};
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::Networking::WinSock::*;
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    let target: std::net::SocketAddrV4 =
+        addr.parse().unwrap_or_else(|_| "127.0.0.1:9".parse().unwrap());
+    unsafe {
+        let mut wsa: WSADATA = zeroed();
+        WSAStartup(0x0202, &mut wsa);
+        let s = socket(AF_INET as i32, SOCK_STREAM, IPPROTO_TCP);
+        // ConnectEx requires a bound socket.
+        let mut local: SOCKADDR_IN = zeroed();
+        local.sin_family = AF_INET;
+        bind(s, &local as *const _ as *const SOCKADDR, size_of::<SOCKADDR_IN>() as i32);
+
+        let guid: GUID = WSAID_CONNECTEX;
+        let mut connect_ex: LPFN_CONNECTEX = None;
+        let mut bytes = 0u32;
+        WSAIoctl(
+            s,
+            SIO_GET_EXTENSION_FUNCTION_POINTER,
+            &guid as *const _ as *const _,
+            size_of::<GUID>() as u32,
+            &mut connect_ex as *mut _ as *mut _,
+            size_of::<LPFN_CONNECTEX>() as u32,
+            &mut bytes,
+            null_mut(),
+            None,
+        );
+
+        let mut remote: SOCKADDR_IN = zeroed();
+        remote.sin_family = AF_INET;
+        remote.sin_port = target.port().to_be();
+        remote.sin_addr.S_un.S_addr = u32::from_ne_bytes(target.ip().octets());
+        // Leaked: the kernel may still complete into it after closesocket.
+        let ov: &mut OVERLAPPED = Box::leak(Box::new(zeroed()));
+        ov.hEvent = WSACreateEvent() as *mut _;
+        if let Some(f) = connect_ex {
+            f(
+                s,
+                &remote as *const _ as *const SOCKADDR,
+                size_of::<SOCKADDR_IN>() as i32,
+                null(),
+                0,
+                null_mut(),
+                ov,
+            );
+            WSAWaitForMultipleEvents(1, &ov.hEvent, 1, 1000, 0);
+        }
+        closesocket(s);
+    }
 }

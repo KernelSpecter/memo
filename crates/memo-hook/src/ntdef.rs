@@ -111,9 +111,12 @@ pub struct FILE_RENAME_INFORMATION {
 pub const FSCTL_SET_REPARSE_POINT: u32 = 0x000900A4;
 pub const FSCTL_DELETE_REPARSE_POINT: u32 = 0x000900AC;
 
-// AFD (socket) IOCTLs indicating real network activity.
+// AFD (socket) IOCTLs indicating real network activity. Codes are
+// (0x12 << 12) | (op << 2) | method: CONNECT is op 1, SEND 7, SEND_DATAGRAM 8
+// and SUPER_CONNECT (ConnectEx, which libuv uses for every TCP connect) 49.
+// Not 0x1207B: that is op 30, AFD_GET_INFO, which every socket creation issues.
 pub const IOCTL_AFD_CONNECT: u32 = 0x00012007;
-pub const IOCTL_AFD_SUPER_CONNECT: u32 = 0x0001207B;
+pub const IOCTL_AFD_SUPER_CONNECT: u32 = 0x000120C7;
 pub const IOCTL_AFD_SEND: u32 = 0x0001201F;
 pub const IOCTL_AFD_SEND_DATAGRAM: u32 = 0x00012023;
 

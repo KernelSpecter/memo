@@ -21,6 +21,28 @@ fn network_access_is_not_cached() {
     assert!(r2.executed, "stderr: {}", r2.stderr);
 }
 
+/// ConnectEx (how libuv, and so Node, connects) is a different AFD request
+/// from connect(). The probe sends nothing, so only the connect can taint.
+#[test]
+fn connectex_is_network_access() {
+    let sb = Sandbox::new("taint_connectex");
+    let r1 = sb.run(&["connectex=127.0.0.1:9"]);
+    assert_eq!(r1.exit, 0, "stderr: {}", r1.stderr);
+    assert!(r1.not_cached(), "ConnectEx must taint; stderr: {}", r1.stderr);
+}
+
+/// Creating and binding a socket issues AFD requests (bind, set-context,
+/// get-info) but talks to no one: it must stay cacheable. Every Node process
+/// does this at startup.
+#[test]
+fn socket_bind_without_connect_is_cached() {
+    let sb = Sandbox::new("taint_bind_only");
+    let r1 = sb.run(&["bind=127.0.0.1:0"]);
+    assert!(r1.cached(), "bind alone is not network access; stderr: {}", r1.stderr);
+    let r2 = sb.run(&["bind=127.0.0.1:0"]);
+    assert!(r2.replayed(), "stderr: {}", r2.stderr);
+}
+
 #[test]
 fn network_cached_with_allow_flag() {
     let sb = Sandbox::new("taint_net_allow");
