@@ -127,7 +127,8 @@ normally but aren't stored (`-v` shows why):
 - a 32-bit (WOW64) child process, or any child the hook couldn't be injected into;
 - creating a junction or other reparse point, or opening a file by its ID;
 - a file the command read being modified by something else during the run;
-- a process outliving the command by more than 2 s (the tree is then killed);
+- a process outliving the command by more than 2 s (it keeps running; the run
+  just isn't cached — memo never kills your background processes);
 - a write under `%SystemRoot%` (reads there are ignored, and a write the OS
   denies doesn't count).
 

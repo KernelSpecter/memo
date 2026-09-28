@@ -167,6 +167,19 @@ fn main() {
                     .expect("spawn child");
                 println!("SPAWNED {} {}", rest, status.code().unwrap_or(-1));
             }
+            "detach" => {
+                // detach=<ms>|<marker>: spawn a child (ourselves) that sleeps
+                // <ms> then writes <marker>, and DO NOT wait for it — the child
+                // outlives this process. Used to test that memo doesn't kill
+                // processes that outlive the command.
+                let (ms, marker) = rest.split_once('|').unwrap_or((rest, ""));
+                let exe = std::env::current_exe().unwrap();
+                let _ = std::process::Command::new(exe)
+                    .arg(format!("sleep={}", ms))
+                    .arg(format!("ready={}", marker))
+                    .spawn();
+                println!("DETACHED {}", rest);
+            }
             "runexe" => {
                 // runexe=<exe path>|<one arg>: run an arbitrary child executable
                 // (so a test can replace it between runs).

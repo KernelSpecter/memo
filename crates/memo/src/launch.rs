@@ -16,7 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectAssociateCompletionPortInformation,
-    SetInformationJobObject, TerminateJobObject, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
+    SetInformationJobObject, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemServices::{
@@ -255,16 +255,24 @@ unsafe fn launch_inner(
     }
 
     // A process outlived the command (the tree didn't drain to zero within the
-    // grace period). Task 9 changes what happens here (taint, don't kill); for
-    // now the tree is still terminated so memo doesn't leave it running.
+    // grace period). Per spec §5.4 we taint the run and DO NOT kill the tree — a
+    // build daemon (Gradle, MSBuild node reuse, VBCSCompiler) or a `start /b`
+    // child keeps running exactly as it would without memo. The caller taints
+    // Outlived so the run is not cached. The job has no KILL_ON_JOB_CLOSE, so
+    // closing its handle below leaves the survivors running.
     let outlived = !zero;
-    if outlived {
-        TerminateJobObject(job, 1);
-    }
 
-    // Reader threads finish when all write ends are closed (tree exited).
-    let _ = out_reader.join();
-    let _ = err_reader.join();
+    // Reader threads finish when all stdout/stderr write ends are closed (the
+    // whole tree exited). If a process outlived the command it still holds a
+    // write end, so joining would block forever — detach the readers instead
+    // (the run is tainted and its console won't be stored anyway).
+    if outlived {
+        drop(out_reader);
+        drop(err_reader);
+    } else {
+        let _ = out_reader.join();
+        let _ = err_reader.join();
+    }
 
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
