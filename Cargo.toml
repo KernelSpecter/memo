@@ -14,7 +14,7 @@ edition = "2021"
 version = "0.1.0"
 license = "MIT"
 authors = ["KernelSpecter <KernelSpecter@users.noreply.github.com>"]
-repository = "local"
+repository = "https://github.com/KernelSpecter/memo"
 
 [workspace.dependencies]
 windows-sys = "0.59"
